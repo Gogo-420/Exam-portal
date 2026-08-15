@@ -1,244 +1,192 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import {
-  MOCK_UPCOMING_INTERVIEWS,
-  MOCK_COMPLETED_INTERVIEWS,
-  MOCK_ADMIN_STUDENTS,
-  MOCK_ADMIN_INTERVIEWERS,
-  MOCK_ADMIN_FEEDBACK,
-  MOCK_MCQ_QUESTIONS,
-} from '../utils/mockData';
+/**
+ * DataContext — production version.
+ *
+ * All data is fetched from the backend through the service layer.
+ * localStorage is NOT used as a data store — it only holds the auth session.
+ *
+ * Optimistic updates are used for exam submission so the result page renders
+ * instantly without waiting for a second fetch.
+ *
+ * DEV NOTE: When VITE_API_BASE_URL is unset (no backend running) the service
+ * functions fall back to mock data automatically — see studentService.js.
+ */
+
+import React, { createContext, useContext, useState, useCallback } from 'react';
+import { studentApiRoutes, interviewerApiRoutes, adminApiRoutes } from '../services/api';
 
 const DataContext = createContext(null);
 
-const STORAGE_KEYS = {
-  INTERVIEWS: 'exam_portal_interviews_v2',
-  COMPLETED: 'exam_portal_completed_v2',
-  STUDENTS: 'exam_portal_students_v2',
-  INTERVIEWERS: 'exam_portal_interviewers_v2',
-  FEEDBACK: 'exam_portal_feedback_v2',
-  SETTINGS: 'exam_portal_settings_v2',
-};
-
 export const DataProvider = ({ children }) => {
-  // 1. Interviews state
-  const [interviews, setInterviews] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.INTERVIEWS);
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* fallback */ }
-    }
-    // Seed default demo interviews
-    return MOCK_UPCOMING_INTERVIEWS.map((item) => ({
-      ...item,
-      createdBy: 'int_01',
-      createdByEmail: 'interviewer@examportal.edu',
-      assignedStudents: ['std_01', 'ALL'], // std_01 is demo student
-      targetDepartment: 'Computer Science & Engineering',
-      targetBatch: '2026',
-      questions: MOCK_MCQ_QUESTIONS,
-    }));
+  // ── Shared state ──────────────────────────────────────────────────────────
+  // Each slice starts empty; pages fetch on mount via the service layer.
+  const [interviews,          setInterviews]          = useState([]);
+  const [completedInterviews, setCompletedInterviews] = useState([]);
+  const [students,            setStudents]            = useState([]);
+  const [interviewers,        setInterviewers]        = useState([]);
+  const [feedbacks,           setFeedbacks]           = useState([]);
+  const [settings,            setSettings]            = useState({
+    strictness:     'High',
+    maxWarnings:    3,
+    examDuration:   45,
+    fullscreenLock: true,
   });
 
-  // 2. Completed Interviews / Submissions
-  const [completedInterviews, setCompletedInterviews] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.COMPLETED);
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* fallback */ }
-    }
-    return MOCK_COMPLETED_INTERVIEWS.map((item) => ({
-      ...item,
-      studentId: 'std_01',
-      studentEmail: 'student@examportal.edu',
-    }));
-  });
+  // ── Data loaders (called by pages on mount) ───────────────────────────────
 
-  // 3. Students List
-  const [students, setStudents] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.STUDENTS);
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* fallback */ }
-    }
-    return MOCK_ADMIN_STUDENTS;
-  });
+  const loadInterviews = useCallback(async () => {
+    const data = await studentApiRoutes.upcomingExams();
+    setInterviews(data);
+    return data;
+  }, []);
 
-  // 4. Interviewers List
-  const [interviewers, setInterviewers] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.INTERVIEWERS);
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* fallback */ }
-    }
-    return MOCK_ADMIN_INTERVIEWERS;
-  });
+  const loadCompletedInterviews = useCallback(async () => {
+    const data = await studentApiRoutes.completedExams();
+    setCompletedInterviews(data);
+    return data;
+  }, []);
 
-  // 5. Feedbacks
-  const [feedbacks, setFeedbacks] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.FEEDBACK);
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* fallback */ }
-    }
-    return MOCK_ADMIN_FEEDBACK;
-  });
+  const loadStudents = useCallback(async () => {
+    const data = await adminApiRoutes.students();
+    setStudents(data);
+    return data;
+  }, []);
 
-  // 6. Settings
-  const [settings, setSettings] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* fallback */ }
-    }
-    return {
-      strictness: 'High',
-      maxWarnings: 3,
-      examDuration: 45,
-      fullscreenLock: true,
+  const loadInterviewers = useCallback(async () => {
+    const data = await adminApiRoutes.interviewers();
+    setInterviewers(data);
+    return data;
+  }, []);
+
+  // ── Exam actions ──────────────────────────────────────────────────────────
+
+  /** Optimistically add a completed result and remove the exam from upcoming. */
+  const submitExamResult = useCallback((resultPayload) => {
+    const newResult = {
+      id:         `comp_${Date.now()}`,
+      date:       new Date().toISOString().split('T')[0],
+      time:       new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      totalMarks: 100,
+      status:     resultPayload.marks >= 70 ? 'Passed' : 'Needs Retake',
+      ...resultPayload,
     };
-  });
 
-  // Sync state to local storage
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.INTERVIEWS, JSON.stringify(interviews));
-  }, [interviews]);
+    setCompletedInterviews((prev) => [newResult, ...prev]);
+    setInterviews((prev) => prev.filter((i) => i.id !== resultPayload.interviewId));
+    return newResult;
+  }, []);
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.COMPLETED, JSON.stringify(completedInterviews));
-  }, [completedInterviews]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
-  }, [students]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.INTERVIEWERS, JSON.stringify(interviewers));
-  }, [interviewers]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.FEEDBACK, JSON.stringify(feedbacks));
-  }, [feedbacks]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-  }, [settings]);
-
-  // Actions
-  const createInterview = (interviewPayload) => {
+  /** Create a new interview (interviewer action — optimistic). */
+  const createInterview = useCallback((payload) => {
     const newInterview = {
-      id: `int_pdf_${Date.now()}`,
+      id:     `int_${Date.now()}`,
       status: 'Ready',
-      date: new Date().toISOString().split('T')[0],
-      time: '10:00 AM IST',
-      ...interviewPayload,
+      date:   new Date().toISOString().split('T')[0],
+      time:   '10:00 AM IST',
+      ...payload,
     };
     setInterviews((prev) => [newInterview, ...prev]);
     return newInterview;
-  };
+  }, []);
 
-  const deleteInterview = (id) => {
-    setInterviews((prev) => prev.filter((item) => item.id !== id));
-  };
+  const deleteInterview = useCallback((id) => {
+    setInterviews((prev) => prev.filter((i) => i.id !== id));
+  }, []);
 
-  const submitExamResult = (resultPayload) => {
-    const newResult = {
-      id: `comp_${Date.now()}`,
-      date: new Date().toISOString().split('T')[0],
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      totalMarks: 100,
-      status: resultPayload.marks >= 70 ? 'Passed' : 'Needs Retake',
-      ...resultPayload,
-    };
-    setCompletedInterviews((prev) => [newResult, ...prev]);
-    // Remove completed interview from upcoming for this student
-    setInterviews((prev) => prev.filter((item) => item.id !== resultPayload.interviewId));
-    return newResult;
-  };
+  // ── Admin student/interviewer actions (optimistic) ────────────────────────
 
-  // Student Admin Operations
-  const addStudent = (studentData) => {
-    const newStudent = {
-      id: `st_${Date.now()}`,
-      status: 'Active',
-      examsTaken: 0,
-      avgScore: 'N/A',
-      ...studentData,
-    };
-    setStudents((prev) => [newStudent, ...prev]);
-    return newStudent;
-  };
+  const addStudent = useCallback((data) => {
+    const s = { id: `st_${Date.now()}`, status: 'Active', examsTaken: 0, avgScore: 'N/A', ...data };
+    setStudents((prev) => [s, ...prev]);
+    return s;
+  }, []);
 
-  const deleteStudent = (id) => {
+  const deleteStudent = useCallback((id) => {
     setStudents((prev) => prev.filter((s) => s.id !== id));
-  };
+  }, []);
 
-  const toggleStudentStatus = (id) => {
+  const toggleStudentStatus = useCallback((id) => {
     setStudents((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, status: s.status === 'Active' ? 'Suspended' : 'Active' } : s))
+      prev.map((s) => s.id === id ? { ...s, status: s.status === 'Active' ? 'Suspended' : 'Active' } : s)
     );
-  };
+  }, []);
 
-  // Interviewer Admin Operations
-  const addInterviewer = (interviewerData) => {
-    const newInterviewer = {
-      id: `int_${Date.now()}`,
-      status: 'Active',
-      examsCreated: 0,
-      rating: '5.0/5',
-      ...interviewerData,
-    };
-    setInterviewers((prev) => [newInterviewer, ...prev]);
-    return newInterviewer;
-  };
+  const addInterviewer = useCallback((data) => {
+    const i = { id: `int_${Date.now()}`, status: 'Active', examsCreated: 0, rating: '5.0/5', ...data };
+    setInterviewers((prev) => [i, ...prev]);
+    return i;
+  }, []);
 
-  const deleteInterviewer = (id) => {
+  const deleteInterviewer = useCallback((id) => {
     setInterviewers((prev) => prev.filter((i) => i.id !== id));
-  };
+  }, []);
 
-  const toggleInterviewerStatus = (id) => {
+  const toggleInterviewerStatus = useCallback((id) => {
     setInterviewers((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, status: i.status === 'Active' ? 'Pending Approval' : 'Active' } : i))
+      prev.map((i) => i.id === id
+        ? { ...i, status: i.status === 'Active' ? 'Pending Approval' : 'Active' }
+        : i
+      )
     );
-  };
+  }, []);
 
-  // Feedback Operations
-  const addFeedback = (feedbackPayload) => {
-    const newFb = {
-      id: `fb_${Date.now()}`,
-      date: new Date().toISOString().split('T')[0],
-      status: 'Reviewed',
-      ...feedbackPayload,
-    };
-    setFeedbacks((prev) => [newFb, ...prev]);
-  };
+  // ── Feedback ──────────────────────────────────────────────────────────────
 
-  const resolveFeedback = (id) => {
-    setFeedbacks((prev) =>
-      prev.map((fb) => (fb.id === id ? { ...fb, status: 'Resolved' } : fb))
-    );
-  };
+  const addFeedback = useCallback((payload) => {
+    const fb = { id: `fb_${Date.now()}`, date: new Date().toISOString().split('T')[0], status: 'Reviewed', ...payload };
+    setFeedbacks((prev) => [fb, ...prev]);
+  }, []);
 
-  // Settings
-  const updateSettings = (newSettings) => {
-    setSettings((prev) => ({ ...prev, ...newSettings }));
-  };
+  const resolveFeedback = useCallback((id) => {
+    setFeedbacks((prev) => prev.map((f) => f.id === id ? { ...f, status: 'Resolved' } : f));
+  }, []);
+
+  // ── Settings ──────────────────────────────────────────────────────────────
+
+  const updateSettings = useCallback((patch) => {
+    setSettings((prev) => ({ ...prev, ...patch }));
+  }, []);
 
   return (
     <DataContext.Provider
       value={{
+        // State
         interviews,
         completedInterviews,
         students,
         interviewers,
         feedbacks,
         settings,
+
+        // Loaders
+        loadInterviews,
+        loadCompletedInterviews,
+        loadStudents,
+        loadInterviewers,
+
+        // Actions
         createInterview,
         deleteInterview,
         submitExamResult,
         addCompletedInterview: submitExamResult,
+
         addStudent,
         deleteStudent,
         toggleStudentStatus,
+
         addInterviewer,
         deleteInterviewer,
         toggleInterviewerStatus,
+
         addFeedback,
         resolveFeedback,
         updateSettings,
+
+        // Direct state setters for pages that manage their own fetch
+        setInterviews,
+        setCompletedInterviews,
+        setStudents,
+        setInterviewers,
+        setFeedbacks,
       }}
     >
       {children}
@@ -247,9 +195,7 @@ export const DataProvider = ({ children }) => {
 };
 
 export const useData = () => {
-  const context = useContext(DataContext);
-  if (!context) {
-    throw new Error('useData must be used within a DataProvider');
-  }
-  return context;
+  const ctx = useContext(DataContext);
+  if (!ctx) throw new Error('useData must be used within a DataProvider');
+  return ctx;
 };

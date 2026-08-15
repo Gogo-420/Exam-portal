@@ -11,16 +11,12 @@ import {
   Sparkles,
   Camera,
   Eye,
-  Maximize,
   ShieldAlert,
-  Users,
   VideoOff,
-  RefreshCw,
-  Info,
-  ShieldCheck,
-  AlertCircle,
 } from 'lucide-react';
 import Modal from '../../components/common/Modal';
+import Loader from '../../components/student/Loader';
+import { getExamQuestions } from '../../services/studentService';
 import { MOCK_MCQ_QUESTIONS } from '../../utils/mockData';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -31,385 +27,270 @@ export default function MCQTestPage() {
   const { user } = useAuth();
   const { interviews, submitExamResult } = useData();
 
-  // Find current interview info or fallback
-  const interviewData = interviews.find((item) => item.id === interviewId) || {
-    id: interviewId || 'int_101',
-    company: 'TechCorp University Exam',
-    title: 'Data Structures & Algorithms Final Examination',
-    domain: 'Data Structures & Algorithms',
-    code: 'DSA-CS301',
-    duration: '45 Mins',
-  };
+  // Resolve interview object — no hardcoded fallback strings
+  const interviewData = interviews.find((item) => item.id === interviewId) ?? null;
 
-  // MCQ Questions State
-  const [questions] = useState(MOCK_MCQ_QUESTIONS);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  // ── Questions ────────────────────────────────────────────────────────────
+  const [questions,      setQuestions]      = useState([]);
+  const [questionsReady, setQuestionsReady] = useState(false);
+  const [currentIndex,   setCurrentIndex]   = useState(0);
 
-  // Answers state { [questionId]: optionIndex }
+  // ── Answers & review ─────────────────────────────────────────────────────
   const [selectedAnswers, setSelectedAnswers] = useState({});
-  // Review set
-  const [reviewSet, setReviewSet] = useState(new Set());
+  const [reviewSet,        setReviewSet]       = useState(new Set());
 
-  // Timer: 45 minutes = 2700 seconds
-  const [timeLeft, setTimeLeft] = useState(2700);
+  // ── Timer ─────────────────────────────────────────────────────────────────
+  const durationSeconds = (() => {
+    const raw   = interviewData?.duration ?? '45 Mins';
+    const match = String(raw).match(/(\d+)/);
+    return match ? parseInt(match[1], 10) * 60 : 2700;
+  })();
+  const [timeLeft, setTimeLeft] = useState(durationSeconds);
 
-  // Webcam & Proctoring States
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const streamRef = useRef(null);
-  const [cameraActive, setCameraActive] = useState(false);
-
-  // Microphone monitoring
-  const audioContextRef   = useRef(null);
-  const analyserRef       = useRef(null);
-  const audioDataRef      = useRef(null);
-  const micCheckInterval  = useRef(null);
-  const [micActive, setMicActive]             = useState(false);
-  const [micLevel, setMicLevel]               = useState(0);   // 0-100 rms
+  // ── Webcam / mic ──────────────────────────────────────────────────────────
+  const videoRef            = useRef(null);
+  const canvasRef           = useRef(null);
+  const streamRef           = useRef(null);
+  const audioContextRef     = useRef(null);
+  const analyserRef         = useRef(null);
+  const audioDataRef        = useRef(null);
+  const micCheckIntervalRef = useRef(null);
+  const [cameraActive,     setCameraActive]     = useState(false);
+  const [micActive,        setMicActive]        = useState(false);
+  const [micLevel,         setMicLevel]         = useState(0);
   const [audioAlertActive, setAudioAlertActive] = useState(false);
   const lastAudioWarningRef = useRef(0);
 
-  // Face Detection Status: 'detected' | 'no_face' | 'multi_face'
-  const [faceStatus, setFaceStatus] = useState('detected');
-  const noFaceTimerRef = useRef(null);
+  // ── Face detection ────────────────────────────────────────────────────────
+  // simulationHoldUntilRef removed — no demo simulation in production
+  const [faceStatus, setFaceStatus]   = useState('detected');
+  const noFaceTimerRef     = useRef(null);
   const noFaceStartTimeRef = useRef(null);
 
-  // Warnings & Violations Tracking
-  const [warningCount, setWarningCount] = useState(0);
+  // ── Violations ────────────────────────────────────────────────────────────
+  const [warningCount,      setWarningCount]      = useState(0);
   const maxWarnings = 3;
-  const [warningModalOpen, setWarningModalOpen] = useState(false);
+  const [warningModalOpen,   setWarningModalOpen]   = useState(false);
   const [activeWarningTitle, setActiveWarningTitle] = useState('');
-  const [activeWarningMessage, setActiveWarningMessage] = useState('');
-  const [violationsLog, setViolationsLog] = useState([]);
+  const [activeWarningMsg,   setActiveWarningMsg]   = useState('');
+  const [violationsLog,      setViolationsLog]      = useState([]);
+  const lastWarningTimeRef  = useRef(0);
 
-  // Fullscreen state
-  const [isFullscreen, setIsFullscreen] = useState(true);
-
-  // Final Submit Modal
+  // ── Fullscreen & submit ───────────────────────────────────────────────────
+  const [isFullscreen,   setIsFullscreen]   = useState(true);
   const [submitModalOpen, setSubmitModalOpen] = useState(false);
 
-  // Ref to prevent duplicate warning triggers during same event
-  const lastWarningTimeRef = useRef(0);
+  // ─────────────────────────────────────────────────────────────────────────
+  // Helpers
+  // ─────────────────────────────────────────────────────────────────────────
 
-  // Format timer MM:SS
-  const formatTime = (seconds) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  const formatTime = (secs) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
-  // Helper to record a violation
   const recordViolation = (type, description) => {
     const now = Date.now();
-    // Debounce duplicate warnings within 2 seconds
     if (now - lastWarningTimeRef.current < 2000) return;
     lastWarningTimeRef.current = now;
 
-    const timeString = formatTime(timeLeft);
-    const newViolation = {
-      id: `viol_${now}`,
-      time: timeString,
-      type,
-      description,
-      timestamp: new Date().toLocaleTimeString(),
-    };
-
+    const newViolation = { id: `viol_${now}`, time: formatTime(timeLeft), type, description, timestamp: new Date().toLocaleTimeString() };
     setViolationsLog((prev) => [...prev, newViolation]);
-    setWarningCount((prevCount) => {
-      const updated = prevCount + 1;
-      setActiveWarningTitle(`Proctor Violation Alert (${updated}/${maxWarnings})`);
-      setActiveWarningMessage(description);
-      setWarningModalOpen(true);
 
-      // Auto Submit if max warnings reached
+    setWarningCount((prev) => {
+      const updated = prev + 1;
+      setActiveWarningTitle(`Proctor Violation Alert (${updated}/${maxWarnings})`);
+      setActiveWarningMsg(description);
+      setWarningModalOpen(true);
       if (updated >= maxWarnings) {
-        setTimeout(() => {
-          handleFinalSubmit('Auto-Submitted: Maximum Violation Limit Reached (3/3)');
-        }, 1200);
+        setTimeout(() => handleFinalSubmit('Auto-Submitted: Maximum Violation Limit Reached'), 1200);
       }
       return updated;
     });
   };
 
-  // Ref to hold simulation overrides so manual testing buttons work reliably
-  const simulationHoldUntilRef = useRef(0);
-
-  // Helper to cleanly stop webcam media stream and release hardware camera + mic
   const stopCameraStream = () => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => {
-        try {
-          track.stop();
-          track.enabled = false;
-        } catch (e) {}
-      });
+      streamRef.current.getTracks().forEach((t) => { try { t.stop(); t.enabled = false; } catch (_) {} });
       streamRef.current = null;
     }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-    // Stop audio analyser
-    if (audioContextRef.current) {
-      try { audioContextRef.current.close(); } catch (e) {}
-      audioContextRef.current = null;
-    }
+    if (videoRef.current) videoRef.current.srcObject = null;
+    if (audioContextRef.current) { try { audioContextRef.current.close(); } catch (_) {} audioContextRef.current = null; }
     setCameraActive(false);
     setMicActive(false);
   };
 
-  // 1. Initialize & Monitor Webcam + Microphone
+  // ─────────────────────────────────────────────────────────────────────────
+  // Load questions on mount
+  // ─────────────────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      // 1. Use questions already attached to the interview object
+      if (interviewData?.questions?.length) {
+        if (!cancelled) { setQuestions(interviewData.questions); setQuestionsReady(true); }
+        return;
+      }
+      // 2. Fetch via service layer (real API → dev mock fallback)
+      try {
+        const fetched = await getExamQuestions(interviewId);
+        if (!cancelled) {
+          setQuestions(fetched?.length ? fetched : MOCK_MCQ_QUESTIONS);
+          setQuestionsReady(true);
+        }
+      } catch {
+        if (!cancelled) { setQuestions(MOCK_MCQ_QUESTIONS); setQuestionsReady(true); }
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [interviewId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Webcam + microphone init
+  // ─────────────────────────────────────────────────────────────────────────
+
   useEffect(() => {
     let isMounted = true;
-
-    const startWebcam = async () => {
+    const startMedia = async () => {
       try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 640 }, height: { ideal: 480 } },
-            audio: true,   // capture mic in same stream so one stop() cleans both
-          });
-          streamRef.current = stream;
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-          }
-          if (isMounted) {
-            setCameraActive(true);
-            setMicActive(true);
-          }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: true,
+        });
+        streamRef.current = stream;
+        if (videoRef.current) videoRef.current.srcObject = stream;
+        if (isMounted) { setCameraActive(true); setMicActive(true); }
 
-          // ── Audio Level Analyser ────────────────────────────────────
-          try {
-            const AudioCtx = window.AudioContext || window.webkitAudioContext;
-            const ctx = new AudioCtx();
-            audioContextRef.current = ctx;
-            const source = ctx.createMediaStreamSource(stream);
-            const analyser = ctx.createAnalyser();
-            analyser.fftSize = 512;
-            analyser.smoothingTimeConstant = 0.4;
-            source.connect(analyser);
-            analyserRef.current = analyser;
-            audioDataRef.current = new Uint8Array(analyser.fftSize);
-          } catch (audioErr) {
-            console.warn('AudioContext unavailable:', audioErr);
-          }
+        // Audio analyser
+        try {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          const ctx = new AudioCtx();
+          audioContextRef.current = ctx;
+          const source = ctx.createMediaStreamSource(stream);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 512;
+          analyser.smoothingTimeConstant = 0.4;
+          source.connect(analyser);
+          analyserRef.current = analyser;
+          audioDataRef.current = new Uint8Array(analyser.fftSize);
+        } catch (_) {}
 
-          // Monitor camera track disconnection
-          const videoTrack = stream.getVideoTracks()[0];
-          if (videoTrack) {
-            videoTrack.onended = () => {
-              if (isMounted) {
-                setCameraActive(false);
-                recordViolation('Camera Disconnected', 'Webcam stream was disconnected or disabled!');
-              }
-            };
-            videoTrack.onmute = () => {
-              if (isMounted) {
-                recordViolation('Camera Muted', 'Webcam video stream was muted by device!');
-              }
-            };
-          }
-
-          // Monitor audio track disconnection
-          const audioTrack = stream.getAudioTracks()[0];
-          if (audioTrack) {
-            audioTrack.onended = () => {
-              if (isMounted) setMicActive(false);
-            };
-          }
+        const vt = stream.getVideoTracks()[0];
+        if (vt) {
+          vt.onended = () => { if (isMounted) { setCameraActive(false); recordViolation('Camera Disconnected', 'Webcam stream was disconnected!'); } };
+          vt.onmute  = () => { if (isMounted) recordViolation('Camera Muted', 'Webcam video was muted by the device.'); };
         }
-      } catch (err) {
-        console.warn('Webcam/mic access error or permission denied:', err);
-        if (isMounted) {
-          setCameraActive(true); // Fallback active for sandbox preview
-        }
+        const at = stream.getAudioTracks()[0];
+        if (at) at.onended = () => { if (isMounted) setMicActive(false); };
+      } catch (_) {
+        if (isMounted) setCameraActive(true); // sandbox fallback
       }
     };
+    startMedia();
+    return () => { isMounted = false; stopCameraStream(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    startWebcam();
-
-    return () => {
-      isMounted = false;
-      stopCameraStream();
-    };
-  }, []);
-
-  // Periodic Camera Connectivity & Track Health Check
+  // Periodic health check
   useEffect(() => {
-    const healthInterval = setInterval(() => {
-      if (streamRef.current) {
-        const videoTrack = streamRef.current.getVideoTracks()[0];
-        if (!videoTrack || videoTrack.readyState !== 'live' || !videoTrack.enabled) {
-          setCameraActive(false);
-          recordViolation('Camera Inactive', 'Webcam video feed is inactive or blocked.');
-        } else {
-          setCameraActive(true);
-        }
-
-        // Also check mic track health
-        const audioTrack = streamRef.current.getAudioTracks()[0];
-        setMicActive(!!(audioTrack && audioTrack.readyState === 'live' && audioTrack.enabled));
-      }
+    const iv = setInterval(() => {
+      if (!streamRef.current) return;
+      const vt = streamRef.current.getVideoTracks()[0];
+      if (!vt || vt.readyState !== 'live' || !vt.enabled) { setCameraActive(false); recordViolation('Camera Inactive', 'Webcam feed is inactive or blocked.'); }
+      else setCameraActive(true);
+      const at = streamRef.current.getAudioTracks()[0];
+      setMicActive(!!(at && at.readyState === 'live' && at.enabled));
     }, 4000);
+    return () => clearInterval(iv);
+  }, [timeLeft]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    return () => clearInterval(healthInterval);
-  }, [timeLeft]);
-
-  // Microphone Audio Level Monitor — detects audible speech / background noise
+  // Microphone audio level monitor
   useEffect(() => {
-    const SPEECH_THRESHOLD = 18;   // RMS level 0-100 above which we flag audio
-    const WARNING_COOLDOWN  = 12000; // ms — minimum gap between consecutive audio warnings
-
-    micCheckInterval.current = setInterval(() => {
+    const SPEECH_THRESHOLD = 18;
+    const COOLDOWN = 12000;
+    micCheckIntervalRef.current = setInterval(() => {
       if (!analyserRef.current || !audioDataRef.current) return;
       analyserRef.current.getByteTimeDomainData(audioDataRef.current);
-
-      // Compute RMS of the PCM buffer
       let sum = 0;
       for (let i = 0; i < audioDataRef.current.length; i++) {
-        const normalized = (audioDataRef.current[i] - 128) / 128; // -1..1
-        sum += normalized * normalized;
+        const n = (audioDataRef.current[i] - 128) / 128;
+        sum += n * n;
       }
       const rms = Math.round(Math.sqrt(sum / audioDataRef.current.length) * 100);
       setMicLevel(rms);
       setAudioAlertActive(rms > SPEECH_THRESHOLD);
-
-      if (rms > SPEECH_THRESHOLD) {
-        const now = Date.now();
-        if (now - lastAudioWarningRef.current > WARNING_COOLDOWN) {
-          lastAudioWarningRef.current = now;
-          recordViolation(
-            'Audio / Speech Detected',
-            `Audible noise or speech detected by microphone (level: ${rms}/100). Talking during an exam is a violation.`
-          );
-        }
+      if (rms > SPEECH_THRESHOLD && Date.now() - lastAudioWarningRef.current > COOLDOWN) {
+        lastAudioWarningRef.current = Date.now();
+        recordViolation('Audio / Speech Detected', `Audible noise detected by microphone (level: ${rms}/100). Talking is a violation.`);
       }
     }, 1500);
+    return () => { if (micCheckIntervalRef.current) clearInterval(micCheckIntervalRef.current); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    return () => {
-      if (micCheckInterval.current) clearInterval(micCheckInterval.current);
-    };
-  }, []);
+  // ─────────────────────────────────────────────────────────────────────────
+  // Face detection (YCbCr pixel analysis fallback)
+  // ─────────────────────────────────────────────────────────────────────────
 
-  // 2. Real-time Face & Person Detection Loop ( Native FaceDetector or Advanced YCbCr Skin Analysis Fallback )
   useEffect(() => {
     const processFrame = async () => {
       if (!videoRef.current || !canvasRef.current || !cameraActive) return;
-
-      // Skip frame processing if manual simulation hold is active
-      if (Date.now() < simulationHoldUntilRef.current) return;
-
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      if (video.readyState < 2) return; // wait until video frames loaded
-
+      if (video.readyState < 2) return;
       const ctx = canvas.getContext('2d');
-      const w = 160;
-      const h = 120;
-      canvas.width = w;
-      canvas.height = h;
+      const w = 160, h = 120;
+      canvas.width = w; canvas.height = h;
       ctx.drawImage(video, 0, 0, w, h);
 
-      // Check for Native Chromium FaceDetector API
       if ('FaceDetector' in window) {
         try {
           // @ts-ignore
-          const faceDetector = new window.FaceDetector({ fastMode: true });
-          const faces = await faceDetector.detect(video);
-          if (faces.length === 1) {
-            setFaceStatus('detected');
-          } else if (faces.length === 0) {
-            setFaceStatus('no_face');
-          } else {
-            setFaceStatus('multi_face');
-          }
+          const fd = new window.FaceDetector({ fastMode: true });
+          const faces = await fd.detect(video);
+          setFaceStatus(faces.length === 1 ? 'detected' : faces.length === 0 ? 'no_face' : 'multi_face');
           return;
-        } catch (e) {
-          // Fall back to pixel analysis fallback
-        }
+        } catch (_) {}
       }
 
-      // Advanced Fallback Pixel & Skin-Tone Analysis
-      const imgData = ctx.getImageData(0, 0, w, h);
-      const pixels = imgData.data;
-
-      let totalLuminance = 0;
-      let sampledCount = 0;
-      let skinPixelCount = 0;
-      let leftSkinCount = 0;
-      let rightSkinCount = 0;
-
-      // Sample pixels in central area (x: 15% to 85%, y: 10% to 90%)
-      const minX = Math.floor(w * 0.15);
-      const maxX = Math.floor(w * 0.85);
-      const minY = Math.floor(h * 0.10);
-      const maxY = Math.floor(h * 0.90);
-
-      for (let y = minY; y < maxY; y += 2) {
-        for (let x = minX; x < maxX; x += 2) {
-          const idx = (y * w + x) * 4;
-          const r = pixels[idx];
-          const g = pixels[idx + 1];
-          const b = pixels[idx + 2];
-
-          const brightness = (r + g + b) / 3;
-          totalLuminance += brightness;
-          sampledCount++;
-
-          // YCbCr Skin Tone Model
-          const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
-          const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
-
-          const isSkin = cr >= 133 && cr <= 173 && cb >= 77 && cb <= 127 && brightness > 20 && brightness < 245;
-
-          if (isSkin) {
-            skinPixelCount++;
-            if (x < w * 0.4) leftSkinCount++;
-            if (x > w * 0.6) rightSkinCount++;
+      const { data: px } = ctx.getImageData(0, 0, w, h);
+      let lum = 0, total = 0, skin = 0, left = 0, right = 0;
+      for (let y = Math.floor(h * 0.10); y < Math.floor(h * 0.90); y += 2) {
+        for (let x = Math.floor(w * 0.15); x < Math.floor(w * 0.85); x += 2) {
+          const i = (y * w + x) * 4;
+          const [r, g, b] = [px[i], px[i+1], px[i+2]];
+          const br = (r + g + b) / 3;
+          lum += br; total++;
+          const cb = 128 - 0.168736*r - 0.331264*g + 0.5*b;
+          const cr = 128 + 0.5*r - 0.418688*g - 0.081312*b;
+          if (cr >= 133 && cr <= 173 && cb >= 77 && cb <= 127 && br > 20 && br < 245) {
+            skin++;
+            if (x < w * 0.4) left++;
+            if (x > w * 0.6) right++;
           }
         }
       }
+      const avgBr = total > 0 ? lum / total : 0;
+      const sr    = total > 0 ? (skin  / total) * 100 : 0;
+      const lr    = total > 0 ? (left  / total) * 100 : 0;
+      const rr    = total > 0 ? (right / total) * 100 : 0;
 
-      const avgBrightness = sampledCount > 0 ? totalLuminance / sampledCount : 0;
-      const skinRatio = sampledCount > 0 ? (skinPixelCount / sampledCount) * 100 : 0;
-      const leftSkinRatio = sampledCount > 0 ? (leftSkinCount / sampledCount) * 100 : 0;
-      const rightSkinRatio = sampledCount > 0 ? (rightSkinCount / sampledCount) * 100 : 0;
-
-      // Rule 1: Covered camera or dark room
-      if (avgBrightness < 15) {
-        setFaceStatus('no_face');
-        return;
-      }
-
-      // Rule 2: Low skin pixel ratio -> No candidate face present in central area
-      if (skinRatio < 3.5) {
-        setFaceStatus('no_face');
-        return;
-      }
-
-      // Rule 3: Multiple distinct facial presence
-      if (leftSkinRatio > 8.0 && rightSkinRatio > 8.0 && skinRatio > 25.0) {
-        setFaceStatus('multi_face');
-        return;
-      }
-
-      // Rule 4: Normal single face detected
+      if (avgBr < 15)                               { setFaceStatus('no_face');    return; }
+      if (sr < 3.5)                                 { setFaceStatus('no_face');    return; }
+      if (lr > 8.0 && rr > 8.0 && sr > 25.0)       { setFaceStatus('multi_face'); return; }
       setFaceStatus('detected');
     };
-
-    const interval = setInterval(processFrame, 800);
-    return () => clearInterval(interval);
+    const iv = setInterval(processFrame, 800);
+    return () => clearInterval(iv);
   }, [cameraActive]);
 
-  // Handle Face Status Rules (No face >3s or Multi-face)
   useEffect(() => {
     if (faceStatus === 'no_face') {
-      if (!noFaceStartTimeRef.current) {
-        noFaceStartTimeRef.current = Date.now();
-      }
-
+      if (!noFaceStartTimeRef.current) noFaceStartTimeRef.current = Date.now();
       noFaceTimerRef.current = setInterval(() => {
         if (noFaceStartTimeRef.current && Date.now() - noFaceStartTimeRef.current >= 3000) {
-          recordViolation('Face Not Found', 'No candidate face detected in camera feed for over 3 seconds!');
+          recordViolation('Face Not Found', 'No candidate face detected for over 3 seconds.');
           clearInterval(noFaceTimerRef.current);
           noFaceStartTimeRef.current = null;
         }
@@ -418,287 +299,210 @@ export default function MCQTestPage() {
       if (noFaceTimerRef.current) clearInterval(noFaceTimerRef.current);
       noFaceStartTimeRef.current = null;
     }
+    if (faceStatus === 'multi_face') recordViolation('Multiple Faces Detected', 'Multiple individuals detected in webcam stream.');
+    return () => { if (noFaceTimerRef.current) clearInterval(noFaceTimerRef.current); };
+  }, [faceStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    if (faceStatus === 'multi_face') {
-      recordViolation('Multiple Faces Detected', 'Multiple individuals detected in webcam stream!');
-    }
+  // ─────────────────────────────────────────────────────────────────────────
+  // Tab / focus / fullscreen guards
+  // ─────────────────────────────────────────────────────────────────────────
 
-    return () => {
-      if (noFaceTimerRef.current) clearInterval(noFaceTimerRef.current);
-    };
-  }, [faceStatus]);
-
-  // 3. Tab Switching & Window Focus Listener
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        recordViolation('Tab Switch Detected', 'Tab switching or browser minimization detected! Stay on exam window.');
-      }
-    };
+    const onHidden = () => { if (document.hidden) recordViolation('Tab Switch', 'Tab switching or window minimization detected.'); };
+    const onBlur   = () => recordViolation('Window Blur', 'Browser window lost focus.');
+    document.addEventListener('visibilitychange', onHidden);
+    window.addEventListener('blur', onBlur);
+    return () => { document.removeEventListener('visibilitychange', onHidden); window.removeEventListener('blur', onBlur); };
+  }, [timeLeft]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const handleWindowBlur = () => {
-      recordViolation('Window Blur', 'Browser window lost focus. External window switching detected.');
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('blur', handleWindowBlur);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('blur', handleWindowBlur);
-    };
-  }, [timeLeft]);
-
-  // 4. Fullscreen Lock Enforcement
   useEffect(() => {
-    // Attempt fullscreen on start
-    try {
-      if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
-        document.documentElement.requestFullscreen().catch(() => {});
-      }
-    } catch (e) {}
-
-    const handleFullscreenChange = () => {
-      if (!document.fullscreenElement) {
-        setIsFullscreen(false);
-        recordViolation('Fullscreen Exited', 'Fullscreen mode was exited! Re-enter fullscreen to continue.');
-      } else {
-        setIsFullscreen(true);
-      }
+    try { if (document.documentElement.requestFullscreen && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); } catch (_) {}
+    const onFsChange = () => {
+      if (!document.fullscreenElement) { setIsFullscreen(false); recordViolation('Fullscreen Exited', 'Fullscreen mode was exited.'); }
+      else setIsFullscreen(true);
     };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, [timeLeft]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, [timeLeft]);
-
-  // Request Fullscreen re-entry
   const reenterFullscreen = () => {
-    try {
-      if (document.documentElement.requestFullscreen) {
-        document.documentElement.requestFullscreen();
-      }
-      setIsFullscreen(true);
-      setWarningModalOpen(false);
-    } catch (err) {
-      setIsFullscreen(true);
-      setWarningModalOpen(false);
-    }
+    try { document.documentElement.requestFullscreen?.(); } catch (_) {}
+    setIsFullscreen(true);
+    setWarningModalOpen(false);
   };
 
-  // 5. Timer Effect & Auto-Submit on Timeout
-  useEffect(() => {
-    if (timeLeft <= 0) {
-      handleFinalSubmit('Timer Expired (45 Minutes)');
-      return;
-    }
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => prev - 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [timeLeft]);
+  // ─────────────────────────────────────────────────────────────────────────
+  // Timer
+  // ─────────────────────────────────────────────────────────────────────────
 
-  // 6. BeforeUnload window listener
   useEffect(() => {
-    const handleBeforeUnload = (e) => {
-      e.preventDefault();
-      e.returnValue = 'Leaving the exam will auto-submit your test paper!';
-      return e.returnValue;
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    if (timeLeft <= 0) { handleFinalSubmit(`Timer Expired (${Math.round(durationSeconds / 60)} Minutes)`); return; }
+    const iv = setInterval(() => setTimeLeft((p) => p - 1), 1000);
+    return () => clearInterval(iv);
+  }, [timeLeft]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = 'Leaving will auto-submit your exam.'; return e.returnValue; };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, []);
 
-  // Answer selection helpers
-  const currentQuestion = questions[currentIndex];
+  // ─────────────────────────────────────────────────────────────────────────
+  // Answer helpers
+  // ─────────────────────────────────────────────────────────────────────────
 
-  const handleSelectOption = (optionIndex) => {
-    setSelectedAnswers((prev) => ({
-      ...prev,
-      [currentQuestion.id]: optionIndex,
-    }));
+  const handleSelectOption = (optIdx) => {
+    if (!questions[currentIndex]) return;
+    setSelectedAnswers((prev) => ({ ...prev, [questions[currentIndex].id]: optIdx }));
   };
 
   const toggleReviewMark = () => {
-    const copy = new Set(reviewSet);
-    if (copy.has(currentQuestion.id)) {
-      copy.delete(currentQuestion.id);
-    } else {
-      copy.add(currentQuestion.id);
-    }
-    setReviewSet(copy);
+    if (!questions[currentIndex]) return;
+    setReviewSet((prev) => {
+      const s = new Set(prev);
+      s.has(questions[currentIndex].id) ? s.delete(questions[currentIndex].id) : s.add(questions[currentIndex].id);
+      return s;
+    });
   };
 
   const clearResponse = () => {
-    const copy = { ...selectedAnswers };
-    delete copy[currentQuestion.id];
-    setSelectedAnswers(copy);
+    if (!questions[currentIndex]) return;
+    setSelectedAnswers((prev) => { const c = { ...prev }; delete c[questions[currentIndex].id]; return c; });
   };
 
   const answeredCount = Object.keys(selectedAnswers).length;
 
-  // 7. Final Exam Submission Handler
-  const handleFinalSubmit = (submissionReason) => {
-    // 1. Stop all camera media streams cleanly & release hardware
+  // ─────────────────────────────────────────────────────────────────────────
+  // Final submission
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const handleFinalSubmit = (reason) => {
     stopCameraStream();
+    try { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch (_) {}
 
-    // 2. Exit fullscreen mode if active
-    try {
-      if (document.fullscreenElement) {
-        document.exitFullscreen().catch(() => {});
-      }
-    } catch (e) {}
+    let correct = 0;
+    questions.forEach((q) => { if (selectedAnswers[q.id] === q.correctAnswer) correct++; });
 
-    // Compute evaluation
-    let correctCount = 0;
-    questions.forEach((q) => {
-      if (selectedAnswers[q.id] === q.correctAnswer) {
-        correctCount += 1;
-      }
-    });
+    const total   = questions.length;
+    const score   = total > 0 ? Math.round((correct / total) * 100) : 0;
+    const elapsed = durationSeconds - timeLeft;
+    const timeTaken = `${Math.floor(elapsed / 60)} Mins ${elapsed % 60} Secs`;
 
-    const totalQ = questions.length;
-    const wrongCount = totalQ - correctCount - (totalQ - answeredCount);
-    const score = Math.round((correctCount / totalQ) * 100);
-    const elapsedSeconds = 2700 - timeLeft;
-    const mins = Math.floor(elapsedSeconds / 60);
-    const secs = elapsedSeconds % 60;
-    const formattedTimeTaken = `${mins} Mins ${secs} Secs`;
-
-    const resultPayload = {
-      id: `comp_${Date.now()}`,
-      interviewId: interviewData.id || 'int_101',
-      studentName: user?.name || 'Aarav Sharma',
-      studentEmail: user?.email || 'student@examportal.edu',
-      rollNo: user?.rollNo || 'CS2026-089',
-      company: interviewData.company || 'TechCorp University Exam',
-      title: interviewData.title || 'Data Structures & Algorithms Final Examination',
-      domain: interviewData.domain || 'Data Structures & Algorithms',
-      code: interviewData.code || 'DSA-CS301',
-      date: new Date().toISOString().split('T')[0],
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      marks: score,
-      totalMarks: 100,
-      percentage: score,
-      correctAnswers: correctCount,
-      wrongAnswers: wrongCount,
-      unanswered: totalQ - answeredCount,
-      totalQuestions: totalQ,
-      timeTaken: formattedTimeTaken,
+    const payload = {
+      interviewId:    interviewData?.id     ?? interviewId,
+      studentName:    user?.name            ?? '',
+      studentEmail:   user?.email           ?? '',
+      rollNo:         user?.rollNo          ?? '',
+      company:        interviewData?.company ?? interviewData?.title ?? '',
+      title:          interviewData?.title   ?? interviewData?.company ?? '',
+      domain:         interviewData?.domain  ?? '',
+      code:           interviewData?.code    ?? '',
+      date:           new Date().toISOString().split('T')[0],
+      time:           new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      marks:          score,
+      totalMarks:     100,
+      percentage:     score,
+      correctAnswers: correct,
+      wrongAnswers:   total - correct - (total - answeredCount),
+      unanswered:     total - answeredCount,
+      totalQuestions: total,
+      timeTaken,
       violationsCount: warningCount,
-      violationsList: violationsLog,
-      userAnswers: selectedAnswers,
-      questions: questions,
+      violationsList:  violationsLog,
+      userAnswers:     selectedAnswers,
+      questions,
       status:
-        warningCount >= 3
+        warningCount >= maxWarnings
           ? 'Auto-Submitted (Violations Limit Exceeded)'
-          : submissionReason
-          ? `Submitted (${submissionReason})`
-          : score >= 70
-          ? 'Passed - Distinction'
-          : 'Passed',
+          : reason
+          ? `Submitted (${reason})`
+          : score >= 70 ? 'Passed' : 'Needs Retake',
       proctoringScore: warningCount === 0 ? '100% Clean' : `${Math.max(0, 100 - warningCount * 25)}% Clean`,
     };
 
-    submitExamResult(resultPayload);
-    navigate(`/student/results/${resultPayload.id}`);
+    const result = submitExamResult(payload);
+    navigate(`/student/results/${result.id}`);
   };
 
-  // Manual Simulation Trigger Helpers for UI Testing
-  const triggerSimulatedNoFace = () => {
-    simulationHoldUntilRef.current = Date.now() + 8000;
-    setFaceStatus('no_face');
-  };
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render guards
+  // ─────────────────────────────────────────────────────────────────────────
 
-  const triggerSimulatedMultiFace = () => {
-    simulationHoldUntilRef.current = Date.now() + 8000;
-    setFaceStatus('multi_face');
-  };
+  if (!questionsReady) return <Loader message="Loading examination questions…" />;
+  if (questions.length === 0) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center space-y-3">
+          <AlertTriangle className="w-10 h-10 text-amber-400 mx-auto" />
+          <p className="text-sm font-semibold text-slate-700">No questions found for this exam.</p>
+        </div>
+      </div>
+    );
+  }
 
-  const triggerSimulatedNormalFace = () => {
-    simulationHoldUntilRef.current = 0;
-    setFaceStatus('detected');
-  };
+  const currentQuestion = questions[currentIndex];
 
-  const triggerSimulatedDisconnect = () => {
-    setCameraActive(false);
-    recordViolation('Camera Disconnected', 'Manual camera disconnection simulated by test control.');
-  };
-
-  const triggerSimulatedTabSwitch = () => {
-    recordViolation('Tab Switch Simulated', 'Manual tab switch alert simulated by user.');
-  };
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-[#F5F5F5] p-3 sm:p-5 lg:p-6 space-y-5 max-w-7xl mx-auto text-slate-800 selection:bg-blue-100">
-      
-      {/* Offscreen Canvas for Frame Capture */}
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* Top Header Bar */}
+      {/* ── Top header ─────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center gap-2">
             <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 uppercase">
-              {interviewData.code || 'DSA-CS301'} • PROCTORED EXAM
+              {interviewData?.code ?? 'EXAM'} · PROCTORED
             </span>
-            <span className="text-[10px] font-bold text-slate-500">
-              Candidate: {user?.name || 'Aarav Sharma'}
-            </span>
+            <span className="text-[10px] font-bold text-slate-500">Candidate: {user?.name ?? ''}</span>
           </div>
           <h1 className="text-base font-bold text-slate-900 mt-0.5 tracking-tight">
-            {interviewData.company || 'Data Structures & Algorithms Final Examination'}
+            {interviewData?.company ?? interviewData?.title ?? 'Secure Examination'}
           </h1>
         </div>
-
-        {/* Live Timer & Proctor Badge */}
-        <div className="flex items-center space-x-3 w-full sm:w-auto justify-between sm:justify-end">
-          <div className="flex items-center space-x-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-100 rounded-md font-semibold text-xs">
-            <Sparkles className="w-3.5 h-3.5 text-blue-600 animate-pulse" />
-            <span>AI Proctor Lock Active</span>
+        <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-100 rounded-md font-semibold text-xs">
+            <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+            AI Proctor Active
           </div>
-
-          <div
-            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-bold text-xs border ${
-              timeLeft < 300
-                ? 'bg-red-50 text-red-700 border-red-200 animate-pulse'
-                : 'bg-slate-900 text-white border-slate-800'
-            }`}
-          >
+          <div className={`flex items-center gap-2 px-3.5 py-1.5 rounded-md font-bold text-xs border ${
+            timeLeft < 300 ? 'bg-red-50 text-red-700 border-red-200 animate-pulse' : 'bg-slate-900 text-white border-slate-800'
+          }`}>
             <Clock className="w-3.5 h-3.5" />
-            <span>{formatTime(timeLeft)}</span>
+            {formatTime(timeLeft)}
           </div>
         </div>
       </div>
 
-      {/* Main Grid Layout */}
+      {/* ── Main grid ──────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
-        
-        {/* Left / Center 3 Columns: MCQ Questions View */}
-        <div className="lg:col-span-3 space-y-5">
-          <div className="bg-white rounded-xl p-5 sm:p-7 border border-slate-200/80 shadow-xs space-y-6 text-slate-800">
-            
-            {/* Header & Question Navigation */}
+
+        {/* Question panel */}
+        <div className="lg:col-span-3">
+          <div className="bg-white rounded-xl p-5 sm:p-7 border border-slate-200/80 shadow-xs space-y-6">
+
+            {/* Progress */}
             <div className="space-y-3 border-b border-slate-200 pb-4">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                   Question {currentIndex + 1} of {questions.length}
                 </span>
-
                 <button
                   onClick={toggleReviewMark}
-                  className={`px-3 py-1 text-xs font-medium rounded-md flex items-center space-x-1.5 transition-colors ${
+                  className={`px-3 py-1 text-xs font-medium rounded-md flex items-center gap-1.5 transition-colors ${
                     reviewSet.has(currentQuestion.id)
                       ? 'bg-amber-100 text-amber-800 border border-amber-200 font-bold'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
                 >
                   <Bookmark className="w-3.5 h-3.5" />
-                  <span>{reviewSet.has(currentQuestion.id) ? 'Marked for Review' : 'Mark for Review'}</span>
+                  {reviewSet.has(currentQuestion.id) ? 'Marked for Review' : 'Mark for Review'}
                 </button>
               </div>
-
-              {/* Progress Bar */}
-              <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden border border-slate-200">
+              <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
                 <div
                   className="bg-blue-600 h-1.5 rounded-full transition-all duration-300"
                   style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }}
@@ -706,195 +510,129 @@ export default function MCQTestPage() {
               </div>
             </div>
 
-            {/* Question Heading */}
-            <div className="space-y-2">
-              <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
-                {currentQuestion.question}
-              </h3>
-            </div>
+            {/* Question text */}
+            <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">{currentQuestion.question}</h3>
 
-            {/* Options List */}
-            <div className="space-y-2.5 pt-1">
+            {/* Options */}
+            <div className="space-y-2.5">
               {currentQuestion.options.map((opt, optIdx) => {
-                const isSelected = selectedAnswers[currentQuestion.id] === optIdx;
+                const selected = selectedAnswers[currentQuestion.id] === optIdx;
                 return (
                   <button
                     key={optIdx}
                     onClick={() => handleSelectOption(optIdx)}
                     className={`w-full p-3.5 rounded-lg text-left border text-xs font-medium transition-colors flex items-center justify-between ${
-                      isSelected
+                      selected
                         ? 'border-blue-600 bg-blue-50 text-slate-900 font-bold shadow-xs'
                         : 'border-slate-200/80 hover:border-slate-300 bg-slate-50 text-slate-700'
                     }`}
                   >
-                    <div className="flex items-center space-x-3">
-                      <span
-                        className={`w-6 h-6 rounded flex items-center justify-center font-bold text-xs ${
-                          isSelected ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'
-                        }`}
-                      >
+                    <div className="flex items-center gap-3">
+                      <span className={`w-6 h-6 rounded flex items-center justify-center font-bold text-xs ${selected ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'}`}>
                         {String.fromCharCode(65 + optIdx)}
                       </span>
-                      <span>{opt}</span>
+                      {opt}
                     </div>
-
-                    {isSelected && <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />}
+                    {selected && <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />}
                   </button>
                 );
               })}
             </div>
 
-            {/* Bottom Controls */}
+            {/* Navigation */}
             <div className="pt-5 border-t border-slate-200 flex items-center justify-between flex-wrap gap-3">
-              <button
-                onClick={clearResponse}
-                className="text-xs font-medium text-slate-500 hover:text-slate-800"
-              >
+              <button onClick={clearResponse} className="text-xs font-medium text-slate-500 hover:text-slate-800">
                 Clear Response
               </button>
-
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setCurrentIndex((prev) => Math.max(0, prev - 1))}
+                  onClick={() => setCurrentIndex((p) => Math.max(0, p - 1))}
                   disabled={currentIndex === 0}
-                  className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 font-medium text-xs rounded-md transition-colors flex items-center space-x-1"
+                  className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-700 font-medium text-xs rounded-md transition-colors flex items-center gap-1"
                 >
-                  <ChevronLeft className="w-4 h-4" />
-                  <span>Previous</span>
+                  <ChevronLeft className="w-4 h-4" /> Previous
                 </button>
-
                 {currentIndex < questions.length - 1 ? (
                   <button
-                    onClick={() => setCurrentIndex((prev) => Math.min(questions.length - 1, prev + 1))}
-                    className="px-4 py-1.5 bg-[#374151] hover:bg-[#1F2937] text-white font-medium text-xs rounded-md shadow-xs transition-colors flex items-center space-x-1"
+                    onClick={() => setCurrentIndex((p) => Math.min(questions.length - 1, p + 1))}
+                    className="px-4 py-1.5 bg-[#374151] hover:bg-[#1F2937] text-white font-medium text-xs rounded-md shadow-xs transition-colors flex items-center gap-1"
                   >
-                    <span>Next Question</span>
-                    <ChevronRight className="w-4 h-4 text-blue-400" />
+                    Next Question <ChevronRight className="w-4 h-4 text-blue-400" />
                   </button>
                 ) : (
                   <button
                     onClick={() => setSubmitModalOpen(true)}
-                    className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-md shadow-xs transition-colors flex items-center space-x-1.5"
+                    className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-md shadow-xs transition-colors flex items-center gap-1.5"
                   >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>Submit Exam</span>
+                    <Send className="w-3.5 h-3.5" /> Submit Exam
                   </button>
                 )}
               </div>
             </div>
-
           </div>
         </div>
 
-        {/* Right 1 Column: Persistent Live Proctoring Panel & Navigator */}
+        {/* Proctoring panel */}
         <div className="space-y-4">
-          
-          {/* Live Webcam & Face Status Box */}
+
+          {/* Live feed */}
           <div className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-xs space-y-3">
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-              <div className="flex items-center space-x-1.5 text-xs font-bold text-slate-900">
-                <Camera className="w-4 h-4 text-blue-600" />
-                <span>Live Proctoring Feed</span>
+              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                <Camera className="w-4 h-4 text-blue-600" /> Live Proctoring Feed
               </div>
-              <span className={`px-2 py-0.5 text-[10px] font-bold rounded ${
-                cameraActive ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
-              }`}>
-                {cameraActive ? 'CAM ON' : 'CAM DISCONNECTED'}
+              <span className={`px-2 py-0.5 text-[10px] font-bold rounded ${cameraActive ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+                {cameraActive ? 'CAM ON' : 'DISCONNECTED'}
               </span>
             </div>
 
-            {/* Video Player */}
             <div className="w-full h-36 bg-slate-900 rounded-lg overflow-hidden relative border border-slate-300 flex items-center justify-center">
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className={`w-full h-full object-cover ${!cameraActive ? 'hidden' : ''}`}
-              />
-
+              <video ref={videoRef} autoPlay playsInline muted className={`w-full h-full object-cover ${!cameraActive ? 'hidden' : ''}`} />
               {!cameraActive && (
-                <div className="text-center p-3 text-red-400 space-y-1">
+                <div className="text-center text-red-400 space-y-1">
                   <VideoOff className="w-8 h-8 mx-auto" />
-                  <p className="text-[11px] font-bold">Camera Feed Interrupted</p>
+                  <p className="text-[11px] font-bold">Camera Interrupted</p>
                 </div>
               )}
-
-              {/* Status Overlay Badge inside Video */}
               {cameraActive && (
                 <div className="absolute top-2 left-2 right-2 flex items-center justify-between">
-                  <div className="px-2 py-0.5 bg-slate-900/90 text-white text-[9px] font-bold rounded flex items-center space-x-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                    <span>REC • 30FPS</span>
+                  <div className="px-2 py-0.5 bg-slate-900/90 text-white text-[9px] font-bold rounded flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" /> REC
                   </div>
-
-                  {/* Requirement 2: Status Badges */}
-                  {faceStatus === 'detected' && (
-                    <span className="px-2 py-0.5 bg-emerald-600 text-white text-[10px] font-bold rounded shadow-xs flex items-center space-x-1">
-                      <span>✅ Face Detected</span>
-                    </span>
-                  )}
-                  {faceStatus === 'no_face' && (
-                    <span className="px-2 py-0.5 bg-red-600 text-white text-[10px] font-bold rounded shadow-xs animate-pulse flex items-center space-x-1">
-                      <span>❌ Face Not Found</span>
-                    </span>
-                  )}
-                  {faceStatus === 'multi_face' && (
-                    <span className="px-2 py-0.5 bg-amber-500 text-white text-[10px] font-bold rounded shadow-xs animate-pulse flex items-center space-x-1">
-                      <span>⚠ Multiple Faces Detected</span>
-                    </span>
-                  )}
+                  {faceStatus === 'detected'   && <span className="px-2 py-0.5 bg-emerald-600 text-white text-[10px] font-bold rounded">✅ Face OK</span>}
+                  {faceStatus === 'no_face'    && <span className="px-2 py-0.5 bg-red-600    text-white text-[10px] font-bold rounded animate-pulse">❌ No Face</span>}
+                  {faceStatus === 'multi_face' && <span className="px-2 py-0.5 bg-amber-500  text-white text-[10px] font-bold rounded animate-pulse">⚠ Multi-Face</span>}
                 </div>
               )}
             </div>
 
-            {/* Violation Counters Display */}
+            {/* Violations counter */}
             <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-lg flex items-center justify-between text-xs">
-              <span className="text-slate-500 font-medium text-[11px]">Proctor Violations:</span>
-              <span className={`font-bold px-2 py-0.5 rounded text-xs ${
-                warningCount === 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
-              }`}>
-                {warningCount} / {maxWarnings} Allowed
+              <span className="text-slate-500 font-medium text-[11px]">Violations:</span>
+              <span className={`font-bold px-2 py-0.5 rounded text-xs ${warningCount === 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+                {warningCount} / {maxWarnings}
               </span>
             </div>
 
-            {/* Person visible status */}
+            {/* Person visibility */}
             <div className={`p-2.5 rounded-lg border flex items-center justify-between text-xs ${
-              faceStatus === 'detected'
-                ? 'bg-emerald-50 border-emerald-200'
-                : faceStatus === 'multi_face'
-                ? 'bg-amber-50 border-amber-200'
-                : 'bg-red-50 border-red-200'
+              faceStatus === 'detected' ? 'bg-emerald-50 border-emerald-200' : faceStatus === 'multi_face' ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200'
             }`}>
               <div className="flex items-center gap-1.5">
-                <Eye className={`w-3.5 h-3.5 ${
-                  faceStatus === 'detected' ? 'text-emerald-600'
-                  : faceStatus === 'multi_face' ? 'text-amber-600'
-                  : 'text-red-500'
-                }`} />
-                <span className={`font-semibold text-[11px] ${
-                  faceStatus === 'detected' ? 'text-emerald-800'
-                  : faceStatus === 'multi_face' ? 'text-amber-800'
-                  : 'text-red-700'
-                }`}>
+                <Eye className={`w-3.5 h-3.5 ${faceStatus === 'detected' ? 'text-emerald-600' : faceStatus === 'multi_face' ? 'text-amber-600' : 'text-red-500'}`} />
+                <span className={`font-semibold text-[11px] ${faceStatus === 'detected' ? 'text-emerald-800' : faceStatus === 'multi_face' ? 'text-amber-800' : 'text-red-700'}`}>
                   {faceStatus === 'detected' && 'Person Visible'}
-                  {faceStatus === 'no_face'  && 'No Person Detected'}
+                  {faceStatus === 'no_face'   && 'No Person Detected'}
                   {faceStatus === 'multi_face' && 'Multiple People'}
                 </span>
               </div>
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                faceStatus === 'detected'   ? 'bg-emerald-100 text-emerald-800'
-                : faceStatus === 'multi_face' ? 'bg-amber-100 text-amber-800'
-                : 'bg-red-100 text-red-700'
-              }`}>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${faceStatus === 'detected' ? 'bg-emerald-100 text-emerald-800' : faceStatus === 'multi_face' ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-700'}`}>
                 {faceStatus === 'detected' ? 'OK' : faceStatus === 'multi_face' ? 'WARN' : 'FAIL'}
               </span>
             </div>
 
-            {/* Microphone level monitor */}
-            <div className={`p-2.5 rounded-lg border space-y-1.5 ${
-              audioAlertActive ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'
-            }`}>
+            {/* Mic monitor */}
+            <div className={`p-2.5 rounded-lg border space-y-1.5 ${audioAlertActive ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
               <div className="flex items-center justify-between text-[11px]">
                 <div className="flex items-center gap-1.5">
                   <ShieldAlert className={`w-3.5 h-3.5 ${audioAlertActive ? 'text-amber-600' : 'text-slate-400'}`} />
@@ -902,174 +640,84 @@ export default function MCQTestPage() {
                     {micActive ? (audioAlertActive ? 'Speech Detected!' : 'Mic Monitoring') : 'Mic Inactive'}
                   </span>
                 </div>
-                <span className={`font-bold text-[10px] px-1.5 py-0.5 rounded ${
-                  !micActive          ? 'bg-slate-200 text-slate-500'
-                  : audioAlertActive  ? 'bg-amber-100 text-amber-800'
-                  :                     'bg-emerald-100 text-emerald-700'
-                }`}>
+                <span className={`font-bold text-[10px] px-1.5 py-0.5 rounded ${!micActive ? 'bg-slate-200 text-slate-500' : audioAlertActive ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-700'}`}>
                   {micActive ? (audioAlertActive ? 'FLAGGED' : 'CLEAN') : 'OFF'}
                 </span>
               </div>
-              {/* Audio level bar */}
               {micActive && (
                 <div className="space-y-0.5">
                   <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
                     <div
-                      className={`h-1.5 rounded-full transition-all duration-300 ${
-                        micLevel > 40 ? 'bg-red-500' : micLevel > 18 ? 'bg-amber-500' : 'bg-emerald-500'
-                      }`}
+                      className={`h-1.5 rounded-full transition-all duration-300 ${micLevel > 40 ? 'bg-red-500' : micLevel > 18 ? 'bg-amber-500' : 'bg-emerald-500'}`}
                       style={{ width: `${Math.min(100, micLevel * 2)}%` }}
                     />
                   </div>
                   <p className="text-[9px] text-slate-400 text-right font-mono">
-                    Level: {micLevel}/100 {audioAlertActive ? '— talking detected' : ''}
+                    Level: {micLevel}/100{audioAlertActive ? ' — talking detected' : ''}
                   </p>
                 </div>
               )}
             </div>
-
-            {/* Test Simulation Buttons */}
-            <div className="pt-1 space-y-1.5">
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                Proctor Testing Controls
-              </p>
-              <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-                <button
-                  onClick={triggerSimulatedNoFace}
-                  className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-800 rounded border border-red-200 font-medium"
-                >
-                  Test No Face
-                </button>
-                <button
-                  onClick={triggerSimulatedNormalFace}
-                  className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded border border-emerald-200 font-medium"
-                >
-                  Reset Face OK
-                </button>
-                <button
-                  onClick={triggerSimulatedMultiFace}
-                  className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded border border-amber-200 font-medium"
-                >
-                  Test Multi-Face
-                </button>
-                <button
-                  onClick={triggerSimulatedTabSwitch}
-                  className="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-800 rounded border border-blue-200 font-medium"
-                >
-                  Test Tab Switch
-                </button>
-              </div>
-            </div>
-
           </div>
 
-          {/* Question Navigator Palette */}
-          <div className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-xs space-y-3 text-slate-800">
-            <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-              Question Navigator
-            </h4>
-
-            {/* Legend */}
+          {/* Question navigator */}
+          <div className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-xs space-y-3">
+            <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Question Navigator</h4>
             <div className="grid grid-cols-2 gap-2 text-[10px] font-medium text-slate-500">
-              <div className="flex items-center space-x-1.5">
-                <span className="w-2.5 h-2.5 rounded-xs bg-emerald-600" />
-                <span>Answered ({answeredCount})</span>
-              </div>
-              <div className="flex items-center space-x-1.5">
-                <span className="w-2.5 h-2.5 rounded-xs bg-amber-500" />
-                <span>Review ({reviewSet.size})</span>
-              </div>
-              <div className="flex items-center space-x-1.5">
-                <span className="w-2.5 h-2.5 rounded-xs bg-slate-200" />
-                <span>Unvisited ({questions.length - answeredCount})</span>
-              </div>
-              <div className="flex items-center space-x-1.5">
-                <span className="w-2.5 h-2.5 rounded-xs bg-blue-600" />
-                <span>Current</span>
-              </div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-600 inline-block" /> Answered ({answeredCount})</div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500  inline-block" /> Review ({reviewSet.size})</div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-slate-200  inline-block" /> Unanswered ({questions.length - answeredCount})</div>
+              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-blue-600   inline-block" /> Current</div>
             </div>
-
-            {/* Grid of question buttons */}
             <div className="grid grid-cols-5 gap-1.5 pt-1">
               {questions.map((q, idx) => {
-                const isCurrent = idx === currentIndex;
-                const isAnswered = selectedAnswers[q.id] !== undefined;
-                const isMarked = reviewSet.has(q.id);
-
-                let btnBg = 'bg-slate-100 text-slate-700 hover:bg-slate-200';
-                if (isCurrent) {
-                  btnBg = 'bg-blue-600 text-white font-bold ring-2 ring-blue-300';
-                } else if (isMarked) {
-                  btnBg = 'bg-amber-500 text-white font-bold';
-                } else if (isAnswered) {
-                  btnBg = 'bg-emerald-600 text-white font-bold';
-                }
-
+                const isCur = idx === currentIndex;
+                const isAns = selectedAnswers[q.id] !== undefined;
+                const isMkd = reviewSet.has(q.id);
+                const cls = isCur ? 'bg-blue-600 text-white font-bold ring-2 ring-blue-300'
+                  : isMkd ? 'bg-amber-500 text-white font-bold'
+                  : isAns ? 'bg-emerald-600 text-white font-bold'
+                  :         'bg-slate-100 text-slate-700 hover:bg-slate-200';
                 return (
-                  <button
-                    key={q.id}
-                    onClick={() => setCurrentIndex(idx)}
-                    className={`h-8 rounded text-xs transition-colors flex items-center justify-center ${btnBg}`}
-                  >
+                  <button key={q.id} onClick={() => setCurrentIndex(idx)} className={`h-8 rounded text-xs transition-colors flex items-center justify-center ${cls}`}>
                     {idx + 1}
                   </button>
                 );
               })}
             </div>
-
             <button
               onClick={() => setSubmitModalOpen(true)}
-              className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-md shadow-xs transition-colors flex items-center justify-center space-x-1.5 mt-2"
+              className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-md shadow-xs transition-colors flex items-center justify-center gap-1.5 mt-2"
             >
-              <Send className="w-3.5 h-3.5" />
-              <span>Submit Examination</span>
+              <Send className="w-3.5 h-3.5" /> Submit Examination
             </button>
           </div>
-
         </div>
-
       </div>
 
-      {/* Proctor Warning Alert Modal */}
+      {/* ── Warning modal ───────────────────────────────────────────────── */}
       {warningModalOpen && (
-        <Modal
-          isOpen={warningModalOpen}
-          onClose={() => setWarningModalOpen(false)}
-          title="⚠️ AI Proctoring Security Warning"
-        >
-          <div className="text-center py-2 space-y-4 text-xs text-slate-800">
+        <Modal isOpen={warningModalOpen} onClose={() => setWarningModalOpen(false)} title="⚠️ AI Proctoring Security Warning">
+          <div className="text-center py-2 space-y-4 text-xs">
             <div className="w-12 h-12 rounded-full bg-red-100 border border-red-200 text-red-600 flex items-center justify-center mx-auto">
               <AlertTriangle className="w-6 h-6" />
             </div>
-
             <div className="space-y-1">
               <h4 className="text-sm font-bold text-slate-900">{activeWarningTitle}</h4>
-              <p className="text-slate-600 font-medium bg-red-50 p-2.5 rounded border border-red-100 text-xs">
-                {activeWarningMessage}
-              </p>
+              <p className="text-slate-600 font-medium bg-red-50 p-2.5 rounded border border-red-100 text-xs">{activeWarningMsg}</p>
             </div>
-
             <p className="text-slate-500 leading-relaxed text-[11px]">
-              University exam integrity policies strictly prohibit tab switching, loss of face detection, or exiting full screen.
+              Tab switching, loss of face detection, or exiting fullscreen are prohibited.
               <br />
-              <strong className="text-red-600 font-bold">
-                Warning Count: {warningCount} of {maxWarnings} Maximum Allowed.
-              </strong>
+              <strong className="text-red-600 font-bold">Warning {warningCount} of {maxWarnings} maximum allowed.</strong>
             </p>
-
-            <div className="flex items-center justify-center space-x-2 pt-2">
+            <div className="flex items-center justify-center gap-2 pt-2">
               {!isFullscreen && (
-                <button
-                  onClick={reenterFullscreen}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-md"
-                >
-                  Re-Enter Fullscreen Mode
+                <button onClick={reenterFullscreen} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-md">
+                  Re-Enter Fullscreen
                 </button>
               )}
-              <button
-                onClick={() => setWarningModalOpen(false)}
-                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs rounded-md"
-              >
+              <button onClick={() => setWarningModalOpen(false)} className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs rounded-md">
                 Acknowledge & Resume
               </button>
             </div>
@@ -1077,57 +725,28 @@ export default function MCQTestPage() {
         </Modal>
       )}
 
-      {/* Final Submit Confirmation Modal */}
+      {/* ── Submit confirmation modal ───────────────────────────────────── */}
       {submitModalOpen && (
-        <Modal
-          isOpen={submitModalOpen}
-          onClose={() => setSubmitModalOpen(false)}
-          title="Confirm Final Examination Submission"
-        >
-          <div className="space-y-4 text-xs text-slate-800">
-            <p className="text-slate-600 text-sm">
-              Are you sure you want to finalize and submit your examination paper?
-            </p>
-
+        <Modal isOpen={submitModalOpen} onClose={() => setSubmitModalOpen(false)} title="Confirm Examination Submission">
+          <div className="space-y-4 text-xs">
+            <p className="text-slate-600 text-sm">Are you sure you want to finalise and submit your examination paper?</p>
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-md space-y-2">
-              <div className="flex justify-between">
-                <span className="text-slate-500 font-medium">Total Questions:</span>
-                <span className="font-bold text-slate-800">{questions.length}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500 font-medium">Answered:</span>
-                <span className="font-bold text-emerald-600">{answeredCount}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500 font-medium">Unanswered:</span>
-                <span className="font-bold text-red-600">{questions.length - answeredCount}</span>
-              </div>
-              <div className="flex justify-between border-t border-slate-200 pt-1.5">
-                <span className="text-slate-500 font-medium">Proctor Flags Logged:</span>
-                <span className={`font-bold ${warningCount === 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
-                  {warningCount} Warnings
-                </span>
-              </div>
+              <div className="flex justify-between"><span className="text-slate-500">Total Questions:</span><span className="font-bold">{questions.length}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Answered:</span><span className="font-bold text-emerald-600">{answeredCount}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Unanswered:</span><span className="font-bold text-red-600">{questions.length - answeredCount}</span></div>
+              <div className="flex justify-between border-t border-slate-200 pt-1.5"><span className="text-slate-500">Proctor Flags:</span><span className={`font-bold ${warningCount === 0 ? 'text-emerald-600' : 'text-amber-600'}`}>{warningCount} warnings</span></div>
             </div>
-
-            <div className="flex justify-end space-x-2 pt-2">
-              <button
-                onClick={() => setSubmitModalOpen(false)}
-                className="px-4 py-2 text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md font-medium border border-slate-200"
-              >
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setSubmitModalOpen(false)} className="px-4 py-2 text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md font-medium border border-slate-200">
                 Return to Test
               </button>
-              <button
-                onClick={() => handleFinalSubmit('Student Action')}
-                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs text-white rounded-md shadow-xs"
-              >
+              <button onClick={() => handleFinalSubmit('Student Action')} className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-md shadow-xs">
                 Confirm & Submit
               </button>
             </div>
           </div>
         </Modal>
       )}
-
     </div>
   );
 }

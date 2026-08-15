@@ -19,16 +19,11 @@ import {
   Copy,
   Sliders,
 } from 'lucide-react';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../context/AuthContext'; // kept for user/role check only
 
 export default function LandingPage() {
-  const { switchRoleDemo } = useAuth();
+  const { user, role } = useAuth();
   const navigate = useNavigate();
-
-  const handleDemoLaunch = (role) => {
-    switchRoleDemo(role);
-    navigate(`/${role}/dashboard`);
-  };
 
   return (
     <div className="space-y-20 pb-16 text-slate-100">
@@ -61,7 +56,7 @@ export default function LandingPage() {
           {/* CTA Buttons */}
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
             <button
-              onClick={() => handleDemoLaunch('student')}
+              onClick={() => navigate('/student/login')}
               className="w-full sm:w-auto px-7 py-3.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm rounded-xl shadow-lg shadow-blue-600/30 transition-all duration-200 flex items-center justify-center space-x-2"
             >
               <span>Explore Student Exam Demo</span>
@@ -69,7 +64,7 @@ export default function LandingPage() {
             </button>
 
             <button
-              onClick={() => handleDemoLaunch('interviewer')}
+              onClick={() => navigate('/interviewer/login')}
               className="w-full sm:w-auto px-7 py-3.5 bg-slate-900 hover:bg-slate-800 text-slate-200 font-semibold text-sm rounded-xl border border-slate-800 transition-all flex items-center justify-center space-x-2"
             >
               <span>Interviewer PDF Upload Demo</span>
@@ -153,7 +148,7 @@ export default function LandingPage() {
               Clear exam schedules, pre-test webcam & mic permission checks, interactive MCQ test interface, and instant score rank reports.
             </p>
             <button
-              onClick={() => handleDemoLaunch('student')}
+              onClick={() => navigate('/student/login')}
               className="text-xs font-semibold text-blue-400 flex items-center space-x-1 hover:underline pt-2"
             >
               <span>Launch Student View</span>
@@ -170,7 +165,7 @@ export default function LandingPage() {
               Drag-and-drop PDF question paper upload, AI MCQ compilation, candidate proctor log inspection, and real-time leaderboards.
             </p>
             <button
-              onClick={() => handleDemoLaunch('interviewer')}
+              onClick={() => navigate('/interviewer/login')}
               className="text-xs font-semibold text-indigo-400 flex items-center space-x-1 hover:underline pt-2"
             >
               <span>Launch Examiner View</span>
@@ -187,7 +182,7 @@ export default function LandingPage() {
               University-wide exam metrics, student & faculty governance, Recharts interactive data graphs, and feedback management.
             </p>
             <button
-              onClick={() => handleDemoLaunch('admin')}
+              onClick={() => navigate('/admin/login')}
               className="text-xs font-semibold text-slate-200 flex items-center space-x-1 hover:underline pt-2"
             >
               <span>Launch Admin Control</span>
@@ -280,7 +275,7 @@ export default function LandingPage() {
               Contact University Board
             </Link>
             <button
-              onClick={() => handleDemoLaunch('student')}
+              onClick={() => navigate('/student/login')}
               className="px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-sm rounded-xl border border-slate-700 transition-colors"
             >
               Launch Instant Demo

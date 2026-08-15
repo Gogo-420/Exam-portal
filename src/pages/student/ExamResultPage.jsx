@@ -55,23 +55,21 @@ export default function ExamResultPage() {
     );
   }
 
-  const studentName = result.studentName || user?.name || 'Aarav Sharma';
-  const rollNo = result.rollNo || user?.rollNo || 'CS2026-089';
-  const interviewName = result.company || result.title || 'Data Structures & Algorithms Final Examination';
-  const examCode = result.code || 'DSA-CS301';
-  const domain = result.domain || 'Data Structures & Algorithms';
+  const studentName   = result.studentName   || user?.name  || '';
+  const rollNo        = result.rollNo        || user?.rollNo || '';
+  const interviewName = result.company || result.title || 'Examination';
+  const examCode      = result.code   || '';
+  const domain        = result.domain || '';
 
-  const marks = result.marks ?? 80;
-  const totalMarks = result.totalMarks ?? 100;
-  const percentage = result.percentage ?? Math.round((marks / totalMarks) * 100);
-
-  const correctAnswers = result.correctAnswers ?? Math.round((marks / 100) * (result.totalQuestions || 10));
-  const totalQuestions = result.totalQuestions ?? 10;
-  const wrongAnswers = result.wrongAnswers ?? (totalQuestions - correctAnswers - (result.unanswered || 0));
-  const unanswered = result.unanswered ?? 0;
-
-  const timeTaken = result.timeTaken || '14 Mins 20 Secs';
-  const violationsList = result.violationsList || [];
+  const marks         = result.marks        ?? 0;
+  const totalMarks    = result.totalMarks   ?? 100;
+  const percentage    = result.percentage   ?? Math.round((marks / totalMarks) * 100);
+  const totalQuestions = result.totalQuestions ?? 0;
+  const correctAnswers = result.correctAnswers ?? 0;
+  const wrongAnswers   = result.wrongAnswers   ?? (totalQuestions - correctAnswers - (result.unanswered ?? 0));
+  const unanswered     = result.unanswered     ?? 0;
+  const timeTaken      = result.timeTaken      || '—';
+  const violationsList  = result.violationsList  ?? [];
   const violationsCount = result.violationsCount ?? violationsList.length;
 
   const isPassed = marks >= 70 && violationsCount < 3;
@@ -152,7 +150,7 @@ export default function ExamResultPage() {
               <span>Time Taken</span>
             </div>
             <p className="text-xl font-bold text-blue-700 mt-1">{timeTaken}</p>
-            <p className="text-[10px] text-blue-700 font-medium">Exam Duration: 45 Mins</p>
+            <p className="text-[10px] text-blue-700 font-medium">Exam Duration: {result.duration ?? '—'}</p>
           </div>
 
           <div className={`p-4 rounded-lg space-y-1 border ${

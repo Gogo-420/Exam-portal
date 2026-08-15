@@ -6,6 +6,8 @@ import {
 import ProfileCard from '../../components/student/ProfileCard';
 import { useAuth } from '../../context/AuthContext';
 
+import { updateStudentProfile, changePassword } from '../../services/studentService';
+
 export default function StudentProfile() {
   const { user, updateProfile } = useAuth();
 
@@ -31,28 +33,36 @@ export default function StudentProfile() {
   const [activeTab, setActiveTab] = useState('profile'); // 'profile' | 'security'
 
   // ── Profile save ──────────────────────────────────────────────────────────
-  const handleProfileSave = (e) => {
+  const handleProfileSave = async (e) => {
     e.preventDefault();
     setProfileError('');
     if (!form.name.trim()) { setProfileError('Full name is required.'); return; }
     if (!form.email.trim()) { setProfileError('Email is required.'); return; }
-    // TODO: await updateStudentProfile(form) — replace with API call
-    updateProfile({ ...form });
-    setProfileSaved(true);
-    setTimeout(() => setProfileSaved(false), 3000);
+    try {
+      const updated = await updateStudentProfile(form);
+      updateProfile(updated); // sync AuthContext cache
+      setProfileSaved(true);
+      setTimeout(() => setProfileSaved(false), 3000);
+    } catch (err) {
+      setProfileError(err.message || 'Failed to save profile. Please try again.');
+    }
   };
 
   // ── Password save ─────────────────────────────────────────────────────────
-  const handlePasswordSave = (e) => {
+  const handlePasswordSave = async (e) => {
     e.preventDefault();
     setPwError('');
     if (!pwForm.current) { setPwError('Please enter your current password.'); return; }
     if (pwForm.newPw.length < 8) { setPwError('New password must be at least 8 characters.'); return; }
     if (pwForm.newPw !== pwForm.confirm) { setPwError('Passwords do not match.'); return; }
-    // TODO: await changePassword(pwForm) — replace with API call
-    setPwSaved(true);
-    setPwForm({ current: '', newPw: '', confirm: '' });
-    setTimeout(() => setPwSaved(false), 3000);
+    try {
+      await changePassword({ currentPassword: pwForm.current, newPassword: pwForm.newPw });
+      setPwSaved(true);
+      setPwForm({ current: '', newPw: '', confirm: '' });
+      setTimeout(() => setPwSaved(false), 3000);
+    } catch (err) {
+      setPwError(err.message || 'Failed to change password. Please try again.');
+    }
   };
 
   const inputClass =

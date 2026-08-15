@@ -33,13 +33,17 @@ export default function PerformancePage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // TODO: replace with real API — getPerformanceData()
-    const timer = setTimeout(async () => {
-      const result = await getPerformanceData();
-      setData(result);
-      setLoading(false);
-    }, 700);
-    return () => clearTimeout(timer);
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const result = await getPerformanceData();
+        if (!cancelled) { setData(result); setLoading(false); }
+      } catch (err) {
+        if (!cancelled) { setLoading(false); }
+      }
+    };
+    load();
+    return () => { cancelled = true; };
   }, []);
 
   if (loading) return <Loader message="Loading performance analytics…" />;

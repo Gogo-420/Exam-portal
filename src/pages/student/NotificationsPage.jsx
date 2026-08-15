@@ -1,47 +1,73 @@
-import React, { useState, useMemo } from 'react';
-import { Bell, CheckCheck, Filter } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Bell, CheckCheck, Filter, AlertTriangle } from 'lucide-react';
 import NotificationCard from '../../components/student/NotificationCard';
 import EmptyState from '../../components/student/EmptyState';
 import SearchBar from '../../components/student/SearchBar';
 import Pagination from '../../components/student/Pagination';
-import { MOCK_STUDENT_NOTIFICATIONS } from '../../utils/mockData';
+import Loader from '../../components/student/Loader';
+import {
+  getNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+} from '../../services/studentService';
 
 const PAGE_SIZE = 6;
 
 const TYPE_LABELS = {
-  all:              'All',
-  exam_assigned:    'Exam Assigned',
-  result_published: 'Results',
-  warning_issued:   'Warnings',
-  schedule_updated: 'Schedule',
-  announcement:     'Announcements',
+  all:               'All',
+  exam_assigned:     'Exam Assigned',
+  result_published:  'Results',
+  warning_issued:    'Warnings',
+  schedule_updated:  'Schedule',
+  announcement:      'Announcements',
 };
 
 export default function NotificationsPage() {
-  const [notifications, setNotifications] = useState(MOCK_STUDENT_NOTIFICATIONS);
-  const [search, setSearch]   = useState('');
-  const [filter, setFilter]   = useState('all');
-  const [page, setPage]       = useState(1);
+  const [notifications, setNotifications] = useState([]);
+  const [loading,        setLoading]       = useState(true);
+  const [error,          setError]         = useState('');
+  const [search,         setSearch]        = useState('');
+  const [filter,         setFilter]        = useState('all');
+  const [page,           setPage]          = useState(1);
+
+  // ── Fetch on mount ────────────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const data = await getNotifications();
+        if (!cancelled) setNotifications(data);
+      } catch (err) {
+        if (!cancelled) setError(err.message || 'Failed to load notifications.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
-  const markRead = (id) => {
-    // TODO: await markNotificationRead(id)
-    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+  // ── Mark read handlers ────────────────────────────────────────────────────
+  const handleMarkRead = async (id) => {
+    // Optimistic update
+    setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, read: true } : n));
+    try { await markNotificationRead(id); } catch (_) { /* server will sync on next fetch */ }
   };
 
-  const markAllRead = () => {
-    // TODO: await markAllNotificationsRead()
+  const handleMarkAllRead = async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    try { await markAllNotificationsRead(); } catch (_) {}
   };
 
+  // ── Filter / search / paginate ────────────────────────────────────────────
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return notifications.filter((n) => {
-      const matchQ =
-        !q ||
-        n.title.toLowerCase().includes(q) ||
-        n.description.toLowerCase().includes(q);
+      const matchQ = !q || n.title.toLowerCase().includes(q) || n.description.toLowerCase().includes(q);
       const matchF = filter === 'all' || n.type === filter;
       return matchQ && matchF;
     });
@@ -52,6 +78,24 @@ export default function NotificationsPage() {
 
   const handleSearch = (v) => { setSearch(v); setPage(1); };
   const handleFilter = (v) => { setFilter(v); setPage(1); };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  if (loading) return <Loader message="Loading notifications…" />;
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-4 text-center">
+        <AlertTriangle className="w-8 h-8 text-rose-400" />
+        <p className="text-sm font-semibold text-slate-700">{error}</p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-4 py-2 bg-[#374151] text-white text-xs font-semibold rounded-lg"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 text-slate-800">
@@ -72,7 +116,7 @@ export default function NotificationsPage() {
           )}
           {unreadCount > 0 && (
             <button
-              onClick={markAllRead}
+              onClick={handleMarkAllRead}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
             >
               <CheckCheck className="w-3.5 h-3.5" />
@@ -82,7 +126,7 @@ export default function NotificationsPage() {
         </div>
       </div>
 
-      {/* Filters row */}
+      {/* Filters */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
         <SearchBar
           value={search}
@@ -129,7 +173,7 @@ export default function NotificationsPage() {
       ) : (
         <div className="space-y-2">
           {paginated.map((n) => (
-            <NotificationCard key={n.id} notification={n} onMarkRead={markRead} />
+            <NotificationCard key={n.id} notification={n} onMarkRead={handleMarkRead} />
           ))}
         </div>
       )}

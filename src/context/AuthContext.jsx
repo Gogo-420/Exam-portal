@@ -1,128 +1,105 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { storage, initializeStorage } from '../utils/storage';
-import { DEMO_USERS } from '../utils/mockData';
+/**
+ * AuthContext — production version.
+ *
+ * • login / register call the real backend via authService.
+ * • On mount the stored token is validated (expiry check) and the user profile
+ *   is re-fetched from /auth/me to ensure it is current.
+ * • No demo users, no auto-login, no switchRoleDemo.
+ * • Errors from the API are re-thrown so forms can surface them to users.
+ */
+
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { authService, isTokenValid } from '../services/api';
+import { storage } from '../utils/storage';
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
+  const [user,    setUser]    = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // ── Boot: restore session from localStorage if token is still valid ───────
   useEffect(() => {
-    initializeStorage();
-    const currentUser = storage.getUser();
-    if (currentUser) {
-      setUser(currentUser);
-    } else {
-      // Default demo initial state: student
-      setUser(DEMO_USERS.student);
-      storage.setUser(DEMO_USERS.student);
-    }
-    setLoading(false);
-  }, []);
+    const restoreSession = async () => {
+      const token = storage.getToken();
 
-  const login = (emailOrUsername, password, role) => {
-    let matchedUser = null;
-
-    if (role === 'admin') {
-      if (emailOrUsername === 'admin' || emailOrUsername === DEMO_USERS.admin.email) {
-        matchedUser = { ...DEMO_USERS.admin };
-      } else {
-        matchedUser = {
-          id: 'adm_custom_' + Date.now(),
-          name: emailOrUsername || 'Administrator',
-          username: emailOrUsername,
-          email: 'admin@examportal.edu',
-          role: 'admin',
-          department: 'Central Board',
-          avatar: DEMO_USERS.admin.avatar,
-        };
+      if (!token || !isTokenValid(token)) {
+        // Token absent or expired — clear any stale data and show login
+        storage.clearSession();
+        setLoading(false);
+        return;
       }
-    } else if (role === 'interviewer') {
-      if (emailOrUsername === DEMO_USERS.interviewer.email) {
-        matchedUser = { ...DEMO_USERS.interviewer };
-      } else {
-        matchedUser = {
-          id: 'int_custom_' + Date.now(),
-          name: emailOrUsername.split('@')[0].replace('.', ' ') || 'Professor',
-          email: emailOrUsername,
-          role: 'interviewer',
-          domain: 'Computer Science',
-          experience: '5 Years',
-          department: 'Department of Computer Science',
-          avatar: DEMO_USERS.interviewer.avatar,
-        };
-      }
-    } else {
-      // student
-      if (emailOrUsername === DEMO_USERS.student.email) {
-        matchedUser = { ...DEMO_USERS.student };
-      } else {
-        matchedUser = {
-          id: 'std_custom_' + Date.now(),
-          name: emailOrUsername.split('@')[0].replace('.', ' ') || 'Student',
-          email: emailOrUsername,
-          role: 'student',
-          rollNo: 'CS2026-REG',
-          department: 'School of Computing',
-          avatar: DEMO_USERS.student.avatar,
-        };
-      }
-    }
 
-    setUser(matchedUser);
-    storage.setUser(matchedUser);
-    return matchedUser;
-  };
-
-  const register = (data, role) => {
-    const newUser = {
-      id: `${role === 'student' ? 'std' : 'int'}_${Date.now()}`,
-      name: data.name,
-      email: data.email,
-      role: role,
-      domain: data.domain || 'Computer Science',
-      rollNo: data.rollNo || `CS2026-${Math.floor(100 + Math.random() * 900)}`,
-      department: data.department || 'School of Engineering',
-      avatar: `https://images.unsplash.com/photo-${role === 'student' ? '1535713875002-d1d0cf377fde' : '1573496359142-b8d87734a5a2'}?auto=format&fit=crop&q=80&w=250`,
+      // Token looks valid — try to fetch fresh profile from server
+      try {
+        const freshUser = await authService.getCurrentUser();
+        setUser(freshUser);
+        storage.setUser(freshUser);
+      } catch {
+        // Server rejected the token (revoked / rotated secret / etc.)
+        storage.clearSession();
+        setUser(null);
+      } finally {
+        setLoading(false);
+      }
     };
 
-    setUser(newUser);
-    storage.setUser(newUser);
-    return newUser;
-  };
+    restoreSession();
+  }, []);
 
-  const switchRoleDemo = (roleKey) => {
-    if (DEMO_USERS[roleKey]) {
-      const demoUser = DEMO_USERS[roleKey];
-      setUser(demoUser);
-      storage.setUser(demoUser);
-      return demoUser;
-    }
-  };
+  // ── Login ─────────────────────────────────────────────────────────────────
+  /**
+   * Throws a normalised Error if the server returns 4xx/5xx.
+   * On success stores the JWT and user profile, then returns the user object.
+   */
+  const login = useCallback(async (emailOrUsername, password, role) => {
+    const data = await authService.login({ email: emailOrUsername, username: emailOrUsername, password }, role);
+    // Backend must return { token, user }
+    storage.setToken(data.token);
+    storage.setUser(data.user);
+    setUser(data.user);
+    return data.user;
+  }, []);
 
-  const logout = () => {
+  // ── Register ──────────────────────────────────────────────────────────────
+  /**
+   * Throws a normalised Error if the server returns 4xx/5xx.
+   * On success stores the JWT and user profile, then returns the user object.
+   */
+  const register = useCallback(async (formData, role) => {
+    const data = await authService.register(formData, role);
+    storage.setToken(data.token);
+    storage.setUser(data.user);
+    setUser(data.user);
+    return data.user;
+  }, []);
+
+  // ── Logout ────────────────────────────────────────────────────────────────
+  const logout = useCallback(async () => {
+    try { await authService.logout(); } catch { /* best-effort */ }
+    storage.clearSession();
     setUser(null);
-    storage.removeUser();
-  };
+  }, []);
 
-  const updateProfile = (updatedFields) => {
-    if (!user) return;
-    const updated = { ...user, ...updatedFields };
-    setUser(updated);
-    storage.setUser(updated);
-  };
+  // ── Update profile (optimistic — called after a successful PUT /profile) ─
+  const updateProfile = useCallback((updatedFields) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const updated = { ...prev, ...updatedFields };
+      storage.setUser(updated);
+      return updated;
+    });
+  }, []);
 
   return (
     <AuthContext.Provider
       value={{
         user,
-        role: user?.role || 'student',
+        role:    user?.role ?? null,
         loading,
         login,
         register,
         logout,
-        switchRoleDemo,
         updateProfile,
       }}
     >
@@ -132,9 +109,7 @@ export const AuthProvider = ({ children }) => {
 };
 
 export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within an AuthProvider');
+  return ctx;
 };

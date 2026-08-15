@@ -8,66 +8,63 @@ import {
 import DashboardCard from '../../components/student/DashboardCard';
 import ExamCard from '../../components/student/ExamCard';
 import ResultCard from '../../components/student/ResultCard';
-import NotificationCard from '../../components/student/NotificationCard';
 import Loader from '../../components/student/Loader';
 import EmptyState from '../../components/student/EmptyState';
 import { useAuth } from '../../context/AuthContext';
-import { useData } from '../../context/DataContext';
-// TODO: import { getDashboardData } from '../../services/studentService'; — replace mock below with real API call
-import { MOCK_STUDENT_NOTIFICATIONS } from '../../utils/mockData';
+import { getDashboardData, getNotifications } from '../../services/studentService';
 
 export default function StudentDashboard() {
   const { user } = useAuth();
-  const { interviews, completedInterviews } = useData();
-  const [loading, setLoading] = useState(true);
-  const [dashData, setDashData] = useState(null);
 
-  // Filter interviews for this student
-  const studentUpcoming = interviews.filter((item) => {
-    if (!user) return false;
-    if (user.id === 'std_01') return true;
-    if (!item.assignedStudents) return false;
-    return (
-      item.assignedStudents.includes(user.id) ||
-      item.assignedStudents.includes(user.email) ||
-      item.assignedStudents.includes(user.department) ||
-      item.assignedStudents.includes('ALL')
-    );
-  });
-
-  const studentCompleted = completedInterviews.filter((item) => {
-    if (!user) return false;
-    if (user.id === 'std_01') return true;
-    return item.studentId === user.id || item.studentEmail === user.email;
-  });
+  const [dashData,   setDashData]   = useState(null);
+  const [notifs,     setNotifs]     = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState('');
 
   useEffect(() => {
-    // TODO: replace with real API call — getDashboardData()
-    const timer = setTimeout(() => {
-      const avgScore =
-        studentCompleted.length > 0
-          ? Math.round(
-              studentCompleted.reduce((acc, c) => acc + (c.marks ?? 0), 0) /
-                studentCompleted.length
-            )
-          : 0;
+    let cancelled = false;
 
-      setDashData({
-        totalExams:     studentUpcoming.length + studentCompleted.length,
-        upcomingCount:  studentUpcoming.length,
-        completedCount: studentCompleted.length,
-        avgScore,
-        currentRank:    1,
-        warningCount:   3,
-      });
-      setLoading(false);
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [studentUpcoming.length, studentCompleted.length]);
+    const load = async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const [dash, notifications] = await Promise.all([
+          getDashboardData(),
+          getNotifications(),
+        ]);
+        if (cancelled) return;
+        setDashData(dash);
+        setNotifs(notifications.filter((n) => !n.read).slice(0, 3));
+      } catch (err) {
+        if (!cancelled) setError(err.message || 'Failed to load dashboard.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
 
-  const unreadNotifs = MOCK_STUDENT_NOTIFICATIONS.filter((n) => !n.read).slice(0, 3);
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   if (loading) return <Loader message="Loading dashboard…" />;
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-4 text-center">
+        <AlertTriangle className="w-8 h-8 text-rose-400" />
+        <p className="text-sm font-semibold text-slate-700">{error}</p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-4 py-2 bg-[#374151] text-white text-xs font-semibold rounded-lg"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  const upcomingList  = dashData?.upcomingList  ?? [];
+  const recentResults = dashData?.recentResults ?? [];
 
   return (
     <div className="space-y-6 text-slate-800">
@@ -86,15 +83,14 @@ export default function StudentDashboard() {
             {user?.department ?? 'Department of Engineering'} · Secure AI Proctoring session environment verified.
           </p>
         </div>
-
         <div className="shrink-0">
-          {dashData.upcomingCount > 0 ? (
+          {(dashData?.upcomingExams ?? 0) > 0 ? (
             <Link
               to="/student/upcoming"
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#374151] hover:bg-[#1F2937] text-white font-semibold text-xs rounded-lg shadow-xs transition-colors"
             >
               <PlayCircle className="w-4 h-4 text-blue-400" />
-              <span>View Upcoming Exams</span>
+              View Upcoming Exams
             </Link>
           ) : (
             <span className="inline-block px-4 py-2 bg-slate-100 text-slate-400 text-xs font-medium rounded-lg border border-slate-200">
@@ -104,57 +100,57 @@ export default function StudentDashboard() {
         </div>
       </div>
 
-      {/* Stat cards */}
+      {/* Primary stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <DashboardCard
           title="Student Name"
-          value={user?.name?.split(' ')[0] ?? 'Student'}
+          value={user?.name?.split(' ')[0] ?? '—'}
           icon={User}
           color="blue"
           description={user?.rollNo ?? 'Registered Account'}
         />
         <DashboardCard
           title="Upcoming Exams"
-          value={dashData.upcomingCount}
+          value={dashData?.upcomingExams ?? 0}
           icon={Calendar}
           color="amber"
-          description={dashData.upcomingCount > 0 ? 'Assigned by faculty' : 'No active assignments'}
+          description={(dashData?.upcomingExams ?? 0) > 0 ? 'Assigned by faculty' : 'No active assignments'}
         />
         <DashboardCard
           title="Completed Exams"
-          value={dashData.completedCount}
+          value={dashData?.completedExams ?? 0}
           icon={CheckCircle2}
           color="emerald"
-          description={dashData.completedCount > 0 ? 'Verified submissions' : 'No completed tests yet'}
+          description={(dashData?.completedExams ?? 0) > 0 ? 'Verified submissions' : 'No completed tests yet'}
         />
         <DashboardCard
           title="Avg. Score"
-          value={dashData.completedCount > 0 ? `${dashData.avgScore}%` : 'N/A'}
+          value={(dashData?.completedExams ?? 0) > 0 ? `${dashData.avgScore}%` : 'N/A'}
           icon={Award}
           color="indigo"
-          description={dashData.completedCount > 0 ? 'Cumulative performance' : 'Awaiting first assessment'}
+          description={(dashData?.completedExams ?? 0) > 0 ? 'Cumulative performance' : 'Awaiting first assessment'}
         />
       </div>
 
-      {/* Secondary stat row */}
+      {/* Secondary stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <DashboardCard
           title="Current Rank"
-          value={`#${dashData.currentRank}`}
+          value={dashData?.currentRank ? `#${dashData.currentRank}` : 'N/A'}
           icon={Trophy}
           color="amber"
           description="Among all exam participants"
         />
         <DashboardCard
           title="Warning Count"
-          value={dashData.warningCount}
+          value={dashData?.warningCount ?? 0}
           icon={AlertTriangle}
           color="rose"
           description="AI proctoring flags across sessions"
         />
         <DashboardCard
           title="Total Exams"
-          value={dashData.totalExams}
+          value={dashData?.totalExams ?? 0}
           icon={BarChart2}
           color="purple"
           description="Upcoming + completed combined"
@@ -166,15 +162,15 @@ export default function StudentDashboard() {
         <h3 className="text-sm font-bold text-slate-900 mb-4">Quick Actions</h3>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { label: 'Start Exam',      to: '/student/upcoming',      icon: PlayCircle,   color: 'bg-blue-600 hover:bg-blue-700 text-white' },
-            { label: 'View Results',    to: '/student/completed',     icon: CheckCircle2, color: 'bg-emerald-600 hover:bg-emerald-700 text-white' },
-            { label: 'Update Profile',  to: '/student/profile',       icon: User,         color: 'bg-[#374151] hover:bg-[#1F2937] text-white' },
-            { label: 'Performance',     to: '/student/performance',   icon: BarChart2,    color: 'bg-indigo-600 hover:bg-indigo-700 text-white' },
+            { label: 'Start Exam',     to: '/student/upcoming',    icon: PlayCircle,   color: 'bg-blue-600 hover:bg-blue-700' },
+            { label: 'View Results',   to: '/student/completed',   icon: CheckCircle2, color: 'bg-emerald-600 hover:bg-emerald-700' },
+            { label: 'Update Profile', to: '/student/profile',     icon: User,         color: 'bg-[#374151] hover:bg-[#1F2937]' },
+            { label: 'Performance',    to: '/student/performance', icon: BarChart2,    color: 'bg-indigo-600 hover:bg-indigo-700' },
           ].map(({ label, to, icon: Icon, color }) => (
             <Link
               key={to}
               to={to}
-              className={`flex flex-col items-center justify-center gap-2 py-4 px-3 rounded-xl text-xs font-semibold transition-colors ${color} text-center`}
+              className={`flex flex-col items-center justify-center gap-2 py-4 px-3 rounded-xl text-white text-xs font-semibold transition-colors text-center ${color}`}
             >
               <Icon className="w-5 h-5" />
               {label}
@@ -186,22 +182,17 @@ export default function StudentDashboard() {
       {/* Main content grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-        {/* Upcoming exams (left 2/3) */}
+        {/* Upcoming exams */}
         <div className="lg:col-span-2 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-bold text-slate-900">Upcoming Examinations</h3>
-            {dashData.upcomingCount > 0 && (
-              <Link
-                to="/student/upcoming"
-                className="text-xs font-semibold text-blue-600 hover:underline flex items-center gap-1"
-              >
-                View All ({dashData.upcomingCount})
-                <ArrowRight className="w-3.5 h-3.5" />
+            {upcomingList.length > 0 && (
+              <Link to="/student/upcoming" className="text-xs font-semibold text-blue-600 hover:underline flex items-center gap-1">
+                View All <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             )}
           </div>
-
-          {studentUpcoming.length === 0 ? (
+          {upcomingList.length === 0 ? (
             <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs">
               <EmptyState
                 icon={Inbox}
@@ -211,7 +202,7 @@ export default function StudentDashboard() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {studentUpcoming.slice(0, 4).map((exam) => (
+              {upcomingList.slice(0, 4).map((exam) => (
                 <ExamCard key={exam.id} exam={exam} />
               ))}
             </div>
@@ -225,19 +216,17 @@ export default function StudentDashboard() {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-bold text-slate-900">Recent Results</h3>
-              {studentCompleted.length > 0 && (
-                <Link to="/student/completed" className="text-xs font-semibold text-blue-600 hover:underline">
-                  View all
-                </Link>
+              {recentResults.length > 0 && (
+                <Link to="/student/completed" className="text-xs font-semibold text-blue-600 hover:underline">View all</Link>
               )}
             </div>
-            {studentCompleted.length === 0 ? (
+            {recentResults.length === 0 ? (
               <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs">
                 <EmptyState icon={Clock} title="No results yet" message="Results appear here once you submit an exam." />
               </div>
             ) : (
               <div className="space-y-3">
-                {studentCompleted.slice(0, 3).map((r) => (
+                {recentResults.slice(0, 3).map((r) => (
                   <ResultCard key={r.id} result={r} />
                 ))}
               </div>
@@ -248,15 +237,13 @@ export default function StudentDashboard() {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-bold text-slate-900">Recent Notifications</h3>
-              <Link to="/student/notifications" className="text-xs font-semibold text-blue-600 hover:underline">
-                View all
-              </Link>
+              <Link to="/student/notifications" className="text-xs font-semibold text-blue-600 hover:underline">View all</Link>
             </div>
             <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs divide-y divide-slate-100 overflow-hidden">
-              {unreadNotifs.length === 0 ? (
+              {notifs.length === 0 ? (
                 <EmptyState icon={Bell} title="All caught up" />
               ) : (
-                unreadNotifs.map((n) => (
+                notifs.map((n) => (
                   <div key={n.id} className="p-3 hover:bg-slate-50 transition-colors">
                     <div className="flex items-start gap-2">
                       <span className="w-1.5 h-1.5 rounded-full bg-blue-600 mt-1.5 shrink-0" />

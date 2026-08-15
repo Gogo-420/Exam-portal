@@ -62,19 +62,22 @@ export default function SettingsPage() {
   const [saved, setSaved]       = useState(false);
 
   useEffect(() => {
-    // TODO: replace with real API — getStudentSettings()
-    const timer = setTimeout(async () => {
-      const s = await getStudentSettings();
-      setSettings(s);
-      setLoading(false);
-    }, 400);
-    return () => clearTimeout(timer);
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const s = await getStudentSettings();
+        if (!cancelled) { setSettings(s); setLoading(false); }
+      } catch {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
   }, []);
 
   const update = (key, val) => setSettings((prev) => ({ ...prev, [key]: val }));
 
   const handleSave = async () => {
-    // TODO: await saveStudentSettings(settings)
     await saveStudentSettings(settings);
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
