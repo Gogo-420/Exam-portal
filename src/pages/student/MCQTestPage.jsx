@@ -59,6 +59,16 @@ export default function MCQTestPage() {
   const streamRef = useRef(null);
   const [cameraActive, setCameraActive] = useState(false);
 
+  // Microphone monitoring
+  const audioContextRef   = useRef(null);
+  const analyserRef       = useRef(null);
+  const audioDataRef      = useRef(null);
+  const micCheckInterval  = useRef(null);
+  const [micActive, setMicActive]             = useState(false);
+  const [micLevel, setMicLevel]               = useState(0);   // 0-100 rms
+  const [audioAlertActive, setAudioAlertActive] = useState(false);
+  const lastAudioWarningRef = useRef(0);
+
   // Face Detection Status: 'detected' | 'no_face' | 'multi_face'
   const [faceStatus, setFaceStatus] = useState('detected');
   const noFaceTimerRef = useRef(null);
@@ -124,7 +134,7 @@ export default function MCQTestPage() {
   // Ref to hold simulation overrides so manual testing buttons work reliably
   const simulationHoldUntilRef = useRef(0);
 
-  // Helper to cleanly stop webcam media stream and release hardware camera
+  // Helper to cleanly stop webcam media stream and release hardware camera + mic
   const stopCameraStream = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => {
@@ -138,10 +148,16 @@ export default function MCQTestPage() {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    // Stop audio analyser
+    if (audioContextRef.current) {
+      try { audioContextRef.current.close(); } catch (e) {}
+      audioContextRef.current = null;
+    }
     setCameraActive(false);
+    setMicActive(false);
   };
 
-  // 1. Initialize & Monitor Webcam
+  // 1. Initialize & Monitor Webcam + Microphone
   useEffect(() => {
     let isMounted = true;
 
@@ -150,15 +166,34 @@ export default function MCQTestPage() {
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
           const stream = await navigator.mediaDevices.getUserMedia({
             video: { width: { ideal: 640 }, height: { ideal: 480 } },
-            audio: false,
+            audio: true,   // capture mic in same stream so one stop() cleans both
           });
           streamRef.current = stream;
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
           }
-          if (isMounted) setCameraActive(true);
+          if (isMounted) {
+            setCameraActive(true);
+            setMicActive(true);
+          }
 
-          // Monitor camera disconnection / track ended
+          // ── Audio Level Analyser ────────────────────────────────────
+          try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            const ctx = new AudioCtx();
+            audioContextRef.current = ctx;
+            const source = ctx.createMediaStreamSource(stream);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 512;
+            analyser.smoothingTimeConstant = 0.4;
+            source.connect(analyser);
+            analyserRef.current = analyser;
+            audioDataRef.current = new Uint8Array(analyser.fftSize);
+          } catch (audioErr) {
+            console.warn('AudioContext unavailable:', audioErr);
+          }
+
+          // Monitor camera track disconnection
           const videoTrack = stream.getVideoTracks()[0];
           if (videoTrack) {
             videoTrack.onended = () => {
@@ -173,9 +208,17 @@ export default function MCQTestPage() {
               }
             };
           }
+
+          // Monitor audio track disconnection
+          const audioTrack = stream.getAudioTracks()[0];
+          if (audioTrack) {
+            audioTrack.onended = () => {
+              if (isMounted) setMicActive(false);
+            };
+          }
         }
       } catch (err) {
-        console.warn('Webcam access error or permission denied:', err);
+        console.warn('Webcam/mic access error or permission denied:', err);
         if (isMounted) {
           setCameraActive(true); // Fallback active for sandbox preview
         }
@@ -201,11 +244,51 @@ export default function MCQTestPage() {
         } else {
           setCameraActive(true);
         }
+
+        // Also check mic track health
+        const audioTrack = streamRef.current.getAudioTracks()[0];
+        setMicActive(!!(audioTrack && audioTrack.readyState === 'live' && audioTrack.enabled));
       }
     }, 4000);
 
     return () => clearInterval(healthInterval);
   }, [timeLeft]);
+
+  // Microphone Audio Level Monitor — detects audible speech / background noise
+  useEffect(() => {
+    const SPEECH_THRESHOLD = 18;   // RMS level 0-100 above which we flag audio
+    const WARNING_COOLDOWN  = 12000; // ms — minimum gap between consecutive audio warnings
+
+    micCheckInterval.current = setInterval(() => {
+      if (!analyserRef.current || !audioDataRef.current) return;
+      analyserRef.current.getByteTimeDomainData(audioDataRef.current);
+
+      // Compute RMS of the PCM buffer
+      let sum = 0;
+      for (let i = 0; i < audioDataRef.current.length; i++) {
+        const normalized = (audioDataRef.current[i] - 128) / 128; // -1..1
+        sum += normalized * normalized;
+      }
+      const rms = Math.round(Math.sqrt(sum / audioDataRef.current.length) * 100);
+      setMicLevel(rms);
+      setAudioAlertActive(rms > SPEECH_THRESHOLD);
+
+      if (rms > SPEECH_THRESHOLD) {
+        const now = Date.now();
+        if (now - lastAudioWarningRef.current > WARNING_COOLDOWN) {
+          lastAudioWarningRef.current = now;
+          recordViolation(
+            'Audio / Speech Detected',
+            `Audible noise or speech detected by microphone (level: ${rms}/100). Talking during an exam is a violation.`
+          );
+        }
+      }
+    }, 1500);
+
+    return () => {
+      if (micCheckInterval.current) clearInterval(micCheckInterval.current);
+    };
+  }, []);
 
   // 2. Real-time Face & Person Detection Loop ( Native FaceDetector or Advanced YCbCr Skin Analysis Fallback )
   useEffect(() => {
@@ -773,6 +856,76 @@ export default function MCQTestPage() {
               }`}>
                 {warningCount} / {maxWarnings} Allowed
               </span>
+            </div>
+
+            {/* Person visible status */}
+            <div className={`p-2.5 rounded-lg border flex items-center justify-between text-xs ${
+              faceStatus === 'detected'
+                ? 'bg-emerald-50 border-emerald-200'
+                : faceStatus === 'multi_face'
+                ? 'bg-amber-50 border-amber-200'
+                : 'bg-red-50 border-red-200'
+            }`}>
+              <div className="flex items-center gap-1.5">
+                <Eye className={`w-3.5 h-3.5 ${
+                  faceStatus === 'detected' ? 'text-emerald-600'
+                  : faceStatus === 'multi_face' ? 'text-amber-600'
+                  : 'text-red-500'
+                }`} />
+                <span className={`font-semibold text-[11px] ${
+                  faceStatus === 'detected' ? 'text-emerald-800'
+                  : faceStatus === 'multi_face' ? 'text-amber-800'
+                  : 'text-red-700'
+                }`}>
+                  {faceStatus === 'detected' && 'Person Visible'}
+                  {faceStatus === 'no_face'  && 'No Person Detected'}
+                  {faceStatus === 'multi_face' && 'Multiple People'}
+                </span>
+              </div>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                faceStatus === 'detected'   ? 'bg-emerald-100 text-emerald-800'
+                : faceStatus === 'multi_face' ? 'bg-amber-100 text-amber-800'
+                : 'bg-red-100 text-red-700'
+              }`}>
+                {faceStatus === 'detected' ? 'OK' : faceStatus === 'multi_face' ? 'WARN' : 'FAIL'}
+              </span>
+            </div>
+
+            {/* Microphone level monitor */}
+            <div className={`p-2.5 rounded-lg border space-y-1.5 ${
+              audioAlertActive ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'
+            }`}>
+              <div className="flex items-center justify-between text-[11px]">
+                <div className="flex items-center gap-1.5">
+                  <ShieldAlert className={`w-3.5 h-3.5 ${audioAlertActive ? 'text-amber-600' : 'text-slate-400'}`} />
+                  <span className={`font-semibold ${audioAlertActive ? 'text-amber-800' : 'text-slate-600'}`}>
+                    {micActive ? (audioAlertActive ? 'Speech Detected!' : 'Mic Monitoring') : 'Mic Inactive'}
+                  </span>
+                </div>
+                <span className={`font-bold text-[10px] px-1.5 py-0.5 rounded ${
+                  !micActive          ? 'bg-slate-200 text-slate-500'
+                  : audioAlertActive  ? 'bg-amber-100 text-amber-800'
+                  :                     'bg-emerald-100 text-emerald-700'
+                }`}>
+                  {micActive ? (audioAlertActive ? 'FLAGGED' : 'CLEAN') : 'OFF'}
+                </span>
+              </div>
+              {/* Audio level bar */}
+              {micActive && (
+                <div className="space-y-0.5">
+                  <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className={`h-1.5 rounded-full transition-all duration-300 ${
+                        micLevel > 40 ? 'bg-red-500' : micLevel > 18 ? 'bg-amber-500' : 'bg-emerald-500'
+                      }`}
+                      style={{ width: `${Math.min(100, micLevel * 2)}%` }}
+                    />
+                  </div>
+                  <p className="text-[9px] text-slate-400 text-right font-mono">
+                    Level: {micLevel}/100 {audioAlertActive ? '— talking detected' : ''}
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Test Simulation Buttons */}

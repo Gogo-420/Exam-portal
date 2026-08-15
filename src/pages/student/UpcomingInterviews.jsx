@@ -1,128 +1,138 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Calendar, ArrowRight, ShieldCheck, Search, Inbox } from 'lucide-react';
-import Badge from '../../components/ui/Badge';
+import React, { useState, useMemo } from 'react';
+import { Calendar, Filter } from 'lucide-react';
+import ExamCard from '../../components/student/ExamCard';
+import EmptyState from '../../components/student/EmptyState';
+import SearchBar from '../../components/student/SearchBar';
+import Pagination from '../../components/student/Pagination';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
+
+const PAGE_SIZE = 6;
+
+const STATUS_OPTIONS = ['All', 'Ready', 'Scheduled'];
 
 export default function UpcomingInterviews() {
   const { user } = useAuth();
   const { interviews } = useData();
-  const [search, setSearch] = useState('');
 
-  const assigned = interviews.filter((item) => {
-    if (!user) return false;
-    if (user.id === 'std_01') return true;
-    if (!item.assignedStudents) return false;
-    return (
-      item.assignedStudents.includes(user.id) ||
-      item.assignedStudents.includes(user.email) ||
-      item.assignedStudents.includes(user.department) ||
-      item.assignedStudents.includes('ALL')
-    );
-  });
+  const [search, setSearch]       = useState('');
+  const [status, setStatus]       = useState('All');
+  const [page, setPage]           = useState(1);
 
-  const filtered = assigned.filter(
-    (item) =>
-      (item.company || item.title || '').toLowerCase().includes(search.toLowerCase()) ||
-      (item.domain || '').toLowerCase().includes(search.toLowerCase()) ||
-      (item.code || '').toLowerCase().includes(search.toLowerCase())
-  );
+  // Filter for this student
+  const assigned = useMemo(() => {
+    return interviews.filter((item) => {
+      if (!user) return false;
+      if (user.id === 'std_01') return true;
+      if (!item.assignedStudents) return false;
+      return (
+        item.assignedStudents.includes(user.id) ||
+        item.assignedStudents.includes(user.email) ||
+        item.assignedStudents.includes(user.department) ||
+        item.assignedStudents.includes('ALL')
+      );
+    });
+  }, [interviews, user]);
+
+  const filtered = useMemo(() => {
+    return assigned.filter((item) => {
+      const q = search.toLowerCase();
+      const matchQ =
+        !q ||
+        (item.company ?? item.title ?? '').toLowerCase().includes(q) ||
+        (item.domain ?? '').toLowerCase().includes(q) ||
+        (item.code ?? '').toLowerCase().includes(q);
+      const matchS = status === 'All' || item.status === status;
+      return matchQ && matchS;
+    });
+  }, [assigned, search, status]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const handleSearch = (v) => { setSearch(v); setPage(1); };
+  const handleStatus = (v) => { setStatus(v); setPage(1); };
 
   return (
     <div className="space-y-6 text-slate-800">
+
+      {/* Page header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight">Upcoming Examinations</h2>
+          <h2 className="text-xl font-bold text-slate-900 tracking-tight">Upcoming Exams</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Registered test modules and scheduled AI proctored interview evaluations.
+            Scheduled AI-proctored assessments assigned to your account.
           </p>
         </div>
-
-        {/* Search */}
-        <div className="relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Filter subject or domain..."
-            className="pl-9 pr-4 py-2 text-xs bg-white border border-slate-200 text-slate-800 placeholder-slate-400 rounded-lg focus:outline-hidden focus:border-blue-500 w-full sm:w-64 shadow-xs"
-          />
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg font-medium">
+            {filtered.length} exam{filtered.length !== 1 ? 's' : ''}
+          </span>
         </div>
       </div>
 
-      {filtered.length === 0 ? (
-        <div className="bg-white rounded-xl p-10 border border-slate-200/80 shadow-xs text-center space-y-3">
-          <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-full mx-auto flex items-center justify-center">
-            <Inbox className="w-6 h-6" />
+      {/* Filters */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+        <SearchBar
+          value={search}
+          onChange={handleSearch}
+          placeholder="Search by exam name or domain…"
+          className="w-full sm:w-72"
+        />
+        <div className="flex items-center gap-2">
+          <Filter className="w-4 h-4 text-slate-400 shrink-0" />
+          <div className="flex gap-1">
+            {STATUS_OPTIONS.map((s) => (
+              <button
+                key={s}
+                onClick={() => handleStatus(s)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
+                  status === s
+                    ? 'bg-[#374151] text-white border-[#374151]'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                {s}
+              </button>
+            ))}
           </div>
-          <div>
-            <h3 className="text-sm font-bold text-slate-900">No interviews assigned</h3>
-            <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-              There are no active examination schedules assigned to your account.
-            </p>
-          </div>
+        </div>
+      </div>
+
+      {/* Grid or empty */}
+      {paginated.length === 0 ? (
+        <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs">
+          <EmptyState
+            icon={Calendar}
+            title={search || status !== 'All' ? 'No exams match your filter' : 'No upcoming exams'}
+            message={
+              search || status !== 'All'
+                ? 'Try adjusting your search or filter criteria.'
+                : 'When an interviewer assigns an assessment to your department or batch, it will appear here.'
+            }
+            action={
+              (search || status !== 'All')
+                ? { label: 'Clear filters', onClick: () => { setSearch(''); setStatus('All'); } }
+                : undefined
+            }
+          />
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {filtered.map((item) => (
-            <div
-              key={item.id}
-              className="bg-white rounded-xl p-6 border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all space-y-4 flex flex-col justify-between"
-            >
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded border border-blue-200">
-                    {item.code || 'EXAM-CODE'}
-                  </span>
-                  <Badge variant={item.status === 'Ready' ? 'emerald' : 'amber'}>{item.status}</Badge>
-                </div>
-
-                <div>
-                  <h3 className="text-base font-bold text-slate-900">{item.company || item.title || 'Technical Assessment'}</h3>
-                  <p className="text-xs font-medium text-slate-600 mt-0.5">Domain: {item.domain}</p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 text-xs text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-100">
-                  <div>
-                    <span className="block text-[10px] text-slate-400 uppercase font-semibold">Date</span>
-                    <span className="font-semibold text-slate-800">{item.date}</span>
-                  </div>
-                  <div>
-                    <span className="block text-[10px] text-slate-400 uppercase font-semibold">Time</span>
-                    <span className="font-semibold text-slate-800">{item.time}</span>
-                  </div>
-                  <div>
-                    <span className="block text-[10px] text-slate-400 uppercase font-semibold">Duration</span>
-                    <span className="font-semibold text-slate-800">{item.duration}</span>
-                  </div>
-                  <div>
-                    <span className="block text-[10px] text-slate-400 uppercase font-semibold">Questions</span>
-                    <span className="font-semibold text-slate-800">{item.questions ? item.questions.length : 10} MCQs</span>
-                  </div>
-                </div>
-
-                <p className="text-[11px] text-slate-600 leading-relaxed bg-blue-50/60 p-2.5 rounded-lg border border-blue-100 flex items-start space-x-1.5">
-                  <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-                  <span>{item.instructions || 'Ensure camera and microphone are connected. Fullscreen lock active.'}</span>
-                </p>
-              </div>
-
-              <div className="pt-2">
-                <Link
-                  to={`/student/ready/${item.id}`}
-                  className="w-full py-2.5 bg-[#374151] hover:bg-[#1F2937] text-white font-medium text-xs rounded-lg shadow-xs transition-colors flex items-center justify-center space-x-2"
-                >
-                  <span>Proceed to Proctor Pre-Check</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Link>
-              </div>
-            </div>
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+            {paginated.map((exam) => (
+              <ExamCard key={exam.id} exam={exam} />
+            ))}
+          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={totalPages}
+            onPageChange={setPage}
+            totalItems={filtered.length}
+            pageSize={PAGE_SIZE}
+          />
+        </>
       )}
     </div>
   );
 }
-

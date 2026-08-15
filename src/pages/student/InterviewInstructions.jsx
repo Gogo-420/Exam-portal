@@ -42,6 +42,7 @@ export default function InterviewInstructions() {
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const micStreamRef = useRef(null);
 
   // Warning Modal simulation state
   const [warningModalOpen, setWarningModalOpen] = useState(false);
@@ -68,7 +69,8 @@ export default function InterviewInstructions() {
   const requestMicrophone = async () => {
     try {
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        micStreamRef.current = micStream; // store so cleanup can stop it
       }
       setMicStatus('granted');
     } catch (err) {
@@ -90,11 +92,16 @@ export default function InterviewInstructions() {
     }
   };
 
-  // Cleanup media stream on unmount
+  // Cleanup media stream on unmount — stop ALL tracks (video + audio)
   useEffect(() => {
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach((track) => track.stop());
+        micStreamRef.current = null;
       }
     };
   }, []);

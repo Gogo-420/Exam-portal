@@ -404,6 +404,124 @@ export const MOCK_ADMIN_FEEDBACK = [
   },
 ];
 
+// ─── Student Portal Mock Data ───────────────────────────────────────────────
+
+export const MOCK_STUDENT_PROFILE = {
+  id: 'std_01',
+  name: 'Aarav Sharma',
+  email: 'student@examportal.edu',
+  phone: '+91 98765 43210',
+  college: 'National Institute of Technology',
+  department: 'Computer Science & Engineering',
+  yearOfStudy: '3rd Year',
+  rollNo: 'CS2026-089',
+  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=250',
+};
+
+export const MOCK_STUDENT_NOTIFICATIONS = [
+  {
+    id: 'notif_01',
+    type: 'exam_assigned',
+    title: 'New Exam Assigned',
+    description: 'Data Structures & Algorithms exam has been scheduled for August 10, 2026 at 10:00 AM IST.',
+    datetime: '2026-08-08T09:00:00',
+    read: false,
+  },
+  {
+    id: 'notif_02',
+    type: 'result_published',
+    title: 'Result Published',
+    description: 'Your Full Stack Web Development exam result is now available. You scored 92/100.',
+    datetime: '2026-08-03T14:30:00',
+    read: false,
+  },
+  {
+    id: 'notif_03',
+    type: 'warning_issued',
+    title: 'Proctoring Warning Issued',
+    description: 'A minor proctoring flag was logged during your Operating Systems exam due to brief cursor movement.',
+    datetime: '2026-07-29T11:15:00',
+    read: true,
+  },
+  {
+    id: 'notif_04',
+    type: 'schedule_updated',
+    title: 'Exam Schedule Updated',
+    description: 'The Network Security & Encryption exam has been rescheduled to August 18, 2026 at 4:00 PM IST.',
+    datetime: '2026-08-07T16:45:00',
+    read: false,
+  },
+  {
+    id: 'notif_05',
+    type: 'announcement',
+    title: 'General Announcement',
+    description: 'All students must ensure their webcam and microphone are functional before starting any AI-proctored examination.',
+    datetime: '2026-08-05T08:00:00',
+    read: true,
+  },
+  {
+    id: 'notif_06',
+    type: 'result_published',
+    title: 'Result Published',
+    description: 'Your Computer Networks exam result is now live. You achieved Rank #2 with 88/100.',
+    datetime: '2026-07-16T10:00:00',
+    read: true,
+  },
+  {
+    id: 'notif_07',
+    type: 'exam_assigned',
+    title: 'New Exam Assigned',
+    description: 'Machine Learning & Python exam scheduled for August 12, 2026 at 2:00 PM IST.',
+    datetime: '2026-08-06T13:00:00',
+    read: true,
+  },
+  {
+    id: 'notif_08',
+    type: 'announcement',
+    title: 'Maintenance Notice',
+    description: 'The exam portal will undergo scheduled maintenance on August 9, 2026 from 12:00 AM to 2:00 AM IST.',
+    datetime: '2026-08-04T18:00:00',
+    read: true,
+  },
+];
+
+export const MOCK_STUDENT_PERFORMANCE = {
+  marksTrend: [
+    { exam: 'Computer Networks', marks: 88, date: 'Jul 15' },
+    { exam: 'OOP', marks: 78, date: 'Jul 20' },
+    { exam: 'OS & Linux', marks: 84, date: 'Jul 28' },
+    { exam: 'Full Stack', marks: 92, date: 'Aug 02' },
+  ],
+  rankTrend: [
+    { exam: 'Computer Networks', rank: 2, date: 'Jul 15' },
+    { exam: 'OOP', rank: 8, date: 'Jul 20' },
+    { exam: 'OS & Linux', rank: 3, date: 'Jul 28' },
+    { exam: 'Full Stack', rank: 1, date: 'Aug 02' },
+  ],
+  examsAttempted: [
+    { month: 'May', count: 0 },
+    { month: 'Jun', count: 1 },
+    { month: 'Jul', count: 3 },
+    { month: 'Aug', count: 1 },
+  ],
+  warningStats: [
+    { name: 'Clean Sessions', value: 2, fill: '#10B981' },
+    { name: 'Minor Flags', value: 1, fill: '#F59E0B' },
+    { name: 'Multiple Violations', value: 1, fill: '#EF4444' },
+  ],
+  stats: {
+    avgScore: 85.5,
+    highestScore: 92,
+    lowestScore: 78,
+    totalExams: 4,
+    warningCount: 3,
+    currentRank: 1,
+    totalStudents: 128,
+  },
+};
+
+// ─── End Student Portal Mock Data ────────────────────────────────────────────
+
 export const MOCK_GRAPH_DATA = {
   studentPerformance: [
     { subject: 'Data Structures', avgScore: 84, topScore: 98, passRate: 94 },

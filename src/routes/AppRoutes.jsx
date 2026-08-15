@@ -28,6 +28,9 @@ import InterviewInstructions from '../pages/student/InterviewInstructions';
 import MCQTestPage from '../pages/student/MCQTestPage';
 import StudentProfile from '../pages/student/StudentProfile';
 import ExamResultPage from '../pages/student/ExamResultPage';
+import NotificationsPage from '../pages/student/NotificationsPage';
+import PerformancePage from '../pages/student/PerformancePage';
+import SettingsPage from '../pages/student/SettingsPage';
 
 // Interviewer Pages
 import InterviewerDashboard from '../pages/interviewer/InterviewerDashboard';
@@ -77,6 +80,9 @@ export default function AppRoutes() {
           <Route path="/student/ready/:interviewId" element={<InterviewInstructions />} />
           <Route path="/student/profile" element={<StudentProfile />} />
           <Route path="/student/results/:resultId" element={<ExamResultPage />} />
+          <Route path="/student/notifications" element={<NotificationsPage />} />
+          <Route path="/student/performance" element={<PerformancePage />} />
+          <Route path="/student/settings" element={<SettingsPage />} />
         </Route>
         {/* Full screen MCQ Test Interface */}
         <Route path="/student/exam/:interviewId" element={<MCQTestPage />} />
